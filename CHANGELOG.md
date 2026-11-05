@@ -7,6 +7,8 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-05
+
 ### Fixed
 
 - Watching a terminal by double-click or keyboard no longer also opens a system browser
@@ -33,5 +35,6 @@ First public release.
 - An isolated headless screenshot harness with a fake `hc` and fictional fixtures for normal,
   empty, error, deep-tree, transition, degraded and remote-machine states.
 
-[Unreleased]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/DarkoKuzmanovic/tern-herd/releases/tag/v0.2.1
