@@ -18,6 +18,8 @@ stop an agent.
 | `plugins/herd/herd.css` | Scoped responsive layout |
 | `plugins/herd/README.md` | Full behavior and limits |
 | `test/shoot.sh`, `test/bin/hc` | Isolated headless screenshot runner and fake command |
+| `test/typecheck.sh` | Pinned `luau-lsp analyze` over the three plugin files |
+| `.github/workflows/typecheck.yml` | The only CI job: runs `test/typecheck.sh` |
 | `test/fixtures/` | Fictional `hc` replies, output and assertions |
 | `docs/screenshots/` | Reviewed, metadata-stripped screenshots used by the root README |
 
@@ -59,13 +61,14 @@ stop an agent.
 Run these from the repository root before committing:
 
 ```sh
-shellcheck -S warning test/shoot.sh test/bin/hc  # when shellcheck is installed
+shellcheck -S warning test/shoot.sh test/bin/hc test/typecheck.sh  # when shellcheck is installed
+./test/typecheck.sh
 ./test/shoot.sh demo empty error deep transitions degraded remote
 tern plugin reload herd
 tern plugin list --json
 ```
 
-Expect the harness to exit 0, Herd to be `ready` and `problems` to be `[]`. `plugin list` checks
+Expect the harness to exit 0, Herd to be `ready` and `problems` is `[]`. `plugin list` checks
 host loading; a broken window entry may only show in Tern's log as a missing palette command.
 Check that **Open herd console** still opens/focuses it. Never send live keys to test that command.
 
@@ -74,8 +77,17 @@ A UI change also needs wide and narrow screenshots from sanitized fixtures, for 
 scrolling and privacy. See [test/README.md](test/README.md) for interaction scenarios. Keep published
 images under 300 KB, strip metadata and include only images the README uses.
 
-There is no CI workflow: Tern is closed beta and account-gated. Record the local Tern/hc versions,
-checks exercised and anything not tried; do not claim macOS support was tested on Linux.
+`test/typecheck.sh` is the static gate: it downloads luau-lsp 1.70.1 and Tern's pinned
+`tern.d.luau`, verifies both SHA-256 digests and runs `luau-lsp analyze` over the three plugin
+files, so it exits nonzero on any type error. It needs no Tern account or display, and `--defs
+PATH` checks against a local `tern plugin types DIR` copy instead. Keep the pins in the script and
+the docs in step when either is bumped. It reports drift in `host.luau`/`window.luau` reaching
+Tern's API with the wrong type; lint warnings alone do not fail it.
+
+Only this static check runs in CI (`.github/workflows/typecheck.yml`). Tern is closed beta and
+account-gated with no headless renderer in CI, so the screenshot harness stays local: record the
+local Tern/hc versions, checks exercised and anything not tried; do not claim macOS support was
+tested on Linux.
 
 ## Changelog
 
