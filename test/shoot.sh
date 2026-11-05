@@ -15,10 +15,11 @@
 # SHOOT_PHASED=1 copies a seq/ fixture privately, parks seq/ as phases/ and
 # starts at phase 01. Hooks explicitly promote snapshots; idle polls cannot
 # consume a later phase. The source fixture is never changed.
-# SHOOT_ARTIFACTS=1 gives the artifacts fixture private real files/cwds,
-# deterministic review mtimes and a logging wrapper around real GNU find.
-# Hooks may hold one discovery call briefly to test stale-selection guards;
-# no filesystem matches or document responses are fabricated.
+# SHOOT_ARTIFACTS=1 gives the artifacts fixture private real files/cwds under
+# $T/home/alex and sets only that serve's HOME there for native tilde display.
+# Hooks receive ARTIFACT_HOME/ROOT/MISSING and SERVE_PID for filesystem/env proof.
+# Review mtimes are deterministic; a logging real GNU find wrapper may hold one
+# call briefly to test stale-selection guards. No matches/responses are faked.
 #
 # Isolated per run: control socket, TERN_DAEMON_SOCKET, TERN_CONFIG_DIR,
 # XDG_STATE_HOME/DATA_HOME/CACHE_HOME, and a fake `hc` first on PATH.
@@ -169,6 +170,8 @@ live_before=$(sumtree)
 # subshell so its temp dir and serve die with it whatever happens.
 shoot_one() {
   local scen=$1 fix=$FIXTURES/$1 name encoded ok expect tree prev now stable png kvfile kvhc ms
+  local ARTIFACT_HOME="" ARTIFACT_ROOT="" ARTIFACT_MISSING=""
+  local -a artifact_env=()
 
   fix=$FIXTURES/$scen
   if [ ! -d "$fix" ]; then
@@ -234,14 +237,20 @@ shoot_one() {
   fi
   if [ -n "${SHOOT_ARTIFACTS:-}" ]; then
     [ "$scen" = artifacts ] || { echo "shoot: artifact setup requires the artifacts fixture" >&2; return 1; }
-    mkdir -p "$T/artifacts" "$T/artifacts-missing"
-    cp -r "$fix/files/." "$T/artifacts/"
+    ARTIFACT_HOME=$T/home/alex
+    ARTIFACT_ROOT=$ARTIFACT_HOME/code/shop/.worktrees/cart-totals
+    ARTIFACT_MISSING=$ARTIFACT_HOME/code/shop/.worktrees/checkout-layout
+    mkdir -p "$ARTIFACT_ROOT" "$ARTIFACT_MISSING" "$T/xdg/config"
+    cp -r "$fix/files/." "$ARTIFACT_ROOT/"
+    # Only this serve gets a private HOME. Override inherited XDG_CONFIG_HOME
+    # too, without changing the harness HOME or its live checksum roots.
+    artifact_env=("HOME=$ARTIFACT_HOME" "XDG_CONFIG_HOME=$T/xdg/config")
     # Git preserves content, not mtimes: the lower-numbered review is really
     # newer, so a lexical filename sort cannot accidentally pass the test.
-    touch -t 202601010000 "$T/artifacts/.scratch/review-999.md"
-    touch -t 202601020000 "$T/artifacts/.scratch/review-001.md"
+    touch -t 202601010000 "$ARTIFACT_ROOT/.scratch/review-999.md"
+    touch -t 202601020000 "$ARTIFACT_ROOT/.scratch/review-001.md"
     while IFS= read -r -d '' file; do
-      jq --arg root "$T/artifacts" --arg missing "$T/artifacts-missing" \
+      jq --arg root "$ARTIFACT_ROOT" --arg missing "$ARTIFACT_MISSING" \
         'walk(if type == "object" and has("cwd") then
           if .address? == "t81" then .cwd = $root
           elif .address? == "t82" then .cwd = $missing
@@ -301,7 +310,7 @@ shoot_one() {
       printf 'printf "find" >>%q\n' "$T/state/find.log"
       printf 'printf " %%q" "$@" >>%q\n' "$T/state/find.log"
       printf 'printf "\\n" >>%q\n' "$T/state/find.log"
-      printf 'if [ -e %q ] && [ "${2:-}" = %q ]; then\n' "$T/state/find.hold" "$T/artifacts"
+      printf 'if [ -e %q ] && [ "${2:-}" = %q ]; then\n' "$T/state/find.hold" "$ARTIFACT_ROOT"
       printf '  : >%q; n=0\n' "$T/state/find.started"
       printf '  while [ ! -e %q ]; do\n' "$T/state/find.release"
       printf '    if [ "$n" -ge 60 ]; then echo "private find barrier exceeded 1.5 seconds" >&2; exit 124; fi\n'
@@ -341,7 +350,7 @@ shoot_one() {
     DBUS_SESSION_BUS_ADDRESS=unix:path=$T/no-session-bus \
     HERD_FIXTURE=$fix \
     HERD_FIXTURE_STATE=$T/state \
-    "$TERN" serve --control "$sock" --out "$T/shots" >"$T/serve.log" 2>&1 &
+    env "${artifact_env[@]}" "$TERN" serve --control "$sock" --out "$T/shots" >"$T/serve.log" 2>&1 &
   serve_pid=$!
 
   ok=""
@@ -439,7 +448,9 @@ shoot_one() {
 
   # Hooks may drive only this run, and only after fake-hc isolation is proven.
   if [ -n "${SHOOT_HOOK:-}" ]; then
-    if ! TEST=$TEST T=$T SOCK=$sock TERNFD=$TERN KVFILE=$kvfile bash -euo pipefail -c "$SHOOT_HOOK" >"$T/hook.out" 2>&1; then
+    if ! TEST=$TEST T=$T SOCK=$sock TERNFD=$TERN KVFILE=$kvfile \
+      ARTIFACT_HOME=$ARTIFACT_HOME ARTIFACT_ROOT=$ARTIFACT_ROOT ARTIFACT_MISSING=$ARTIFACT_MISSING \
+      SERVE_PID=$serve_pid bash -euo pipefail -c "$SHOOT_HOOK" >"$T/hook.out" 2>&1; then
       sed 's/^/  hook: /' "$T/hook.out" >&2
       return 1
     fi

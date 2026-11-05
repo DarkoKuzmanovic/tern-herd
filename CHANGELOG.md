@@ -9,24 +9,12 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 ### Added
 
-- Run picker in the console and palette, with remembered labels, saved scope,
-  scope-aware status counts and confirmations that cannot cross scope changes;
-  the palette opens a missing console before presenting its picker.
-- Next/previous needs-you commands and global shortcuts focus the console and
-  cycle blocked/errored terminals in its saved scope, without automatically attaching.
-- Activity inbox with shared, scope-aware unread badges, observed transition
-  metadata, explicit Mark read/Clear controls and non-selected finish recording
-  even while finished terminal rows are hidden.
-- Public static Luau type-check CI with pinned, checksum-verified analyzer and
-  Tern declarations; local `test/typecheck.sh` checks both plugin halves.
-- Watch reuses its read-only viewer across repeated opens and plugin reloads;
-  explicit Float Watch (`p`), Dock Watch (`d`) and Park Watch (`z`) controls
-  arrange that view without stopping its hc terminal. Writable Attach remains
-  a separate new split.
-- Configurable local artifact links on the selected card: Report, newest-by-mtime
-  Review (with exact subsecond ordering) and Brief by default, with native document
-  opening and selected-only, debounced discovery. Global palette preferences work
-  without opening a console. Remote hc and remote/unknown Tern source paths are refused.
+- Run picker in the console and palette switches between All terminals and remembered run scopes without reopening the console.
+- Next/previous needs-you commands and global shortcuts focus the console and cycle blocked or errored terminals without attaching.
+- Activity inbox shows observed terminal updates with unread badges and Mark read/Clear controls, including finishes while finished rows are hidden.
+- Static Luau type-check in CI and locally with `test/typecheck.sh` checks every plugin module.
+- Watch reuses its read-only viewer; Float Watch (`p`), Dock Watch (`d`) and Park Watch (`z`) arrange it without stopping the terminal. Writable Attach stays separate.
+- Report, Review and Brief buttons on the selected card open those files from the terminal’s worktree in Tern; the paths are configurable (palette: Configure Herd artifacts). Local terminals only; needs GNU find.
 
 ### Changed
 

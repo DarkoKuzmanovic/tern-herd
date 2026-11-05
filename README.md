@@ -35,9 +35,13 @@ These show made-up data from the isolated test harness, never a real work sessio
 
 ![Logs card showing a fictional lead's recent output](docs/screenshots/logs.png)
 
-![Transition toast after a fictional builder becomes blocked](docs/screenshots/transition.png)
+![Fictional terminal transitions with completed builders, a hidden finish and unread activity](docs/screenshots/transition.png)
 
 ![Deep terminal tree with nested leads, many workers and a scrolling table](docs/screenshots/deep.png)
+
+![Activity inbox with unread blocked, completed and finished-terminal updates and Mark read/Clear controls](docs/screenshots/activity.png)
+
+![Selected local terminal card with Report, Review and Brief buttons for fictional worktree files](docs/screenshots/artifacts.png)
 
 ## Requirements
 

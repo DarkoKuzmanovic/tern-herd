@@ -242,21 +242,71 @@ viewer_counts() {
 # response, filesystem match, mailbox acknowledgement or document result is faked.
 artifact_root='assert(artifact_source and cx.session:pane(artifact_source)); local root = cx.session:surface(artifact_source, {root="main", depth=0, nodes=1}).main; local a = root.p.herd_artifacts; assert(a); '
 artifact_current_config='[{"label":"Report","path":".scratch/report.md"},{"label":"Review","path":".scratch/review-*.md"},{"label":"Brief","path":".scratch/brief.md"}]'
+artifact_card() {
+  local address=$1 expected=$2
+  # Compare a home-relative suffix with the literal UI tilde, not shell HOME.
+  for _ in {1..30}; do
+    pump
+    # Read rendered card text only. Surface root metadata and native pane.path
+    # legitimately contain absolute private paths; neither is visible text.
+    if ctl tree | jq -e --arg address "$address" --arg expected "$expected" '
+      def nodes: ., (.children[]? | nodes);
+      [.tree[]? | nodes
+        | select((.class? // "" | split(" ")) | index("sf-card"))
+        | select(any(nodes; .class? == "sf-card-meta" and .text? == $address))
+      ] as $cards
+      | ($cards | length) > 0
+        and all($cards[];
+          [nodes | .text? | select(type == "string")] | join("")
+          | (contains("/tmp/herd-shoot") | not)
+            and (gsub("[[:space:]]+"; "") | contains("~" + $expected)))
+    ' >/dev/null; then
+      return 0
+    fi
+  done
+  echo "artifact selected-card text did not settle: $address $expected" >&2
+  return 1
+}
 artifact_wait() {
   local address count
   address=$(jq -Rn --arg value "$1" '$value'); count=$2
   wait_lua "${artifact_root}assert(root.p.herd_cursor == $address and a.address == $address and a.at ~= nil and not a.loading and not a.waiting and #a.matches == $count)"
+  case "$1" in
+    t81) artifact_card t81 /code/shop/.worktrees/cart-totals ;;
+    t82) artifact_card t82 /code/shop/.worktrees/checkout-layout ;;
+  esac
 }
 artifact_initialize() {
   [ -n "${SHOOT_ARTIFACTS:-}" ]
-  [ -f "$T/artifacts/.scratch/report.md" ]
-  [ ! -d "$T/artifacts-missing/.scratch" ]
+  : "${ARTIFACT_HOME:?}" "${ARTIFACT_ROOT:?}" "${ARTIFACT_MISSING:?}" "${SERVE_PID:?}"
+  [ "$ARTIFACT_HOME" = "$T/home/alex" ]
+  case "$ARTIFACT_ROOT" in "$ARTIFACT_HOME"/*) ;; *) return 1 ;; esac
+  case "$ARTIFACT_MISSING" in "$ARTIFACT_HOME"/*) ;; *) return 1 ;; esac
+  [ "$(cd "$ARTIFACT_ROOT" && pwd -P)" = "$ARTIFACT_ROOT" ]
+  [ "$(cd "$ARTIFACT_MISSING" && pwd -P)" = "$ARTIFACT_MISSING" ]
+  [ -f "$ARTIFACT_ROOT/.scratch/report.md" ]
+  [ ! -d "$ARTIFACT_MISSING/.scratch" ]
+  # Inspect the actual serve, not the hook's environment: only the serve HOME
+  # changes. An inherited XDG_CONFIG_HOME must not redirect writes to real home.
+  [ "$HOME" != "$ARTIFACT_HOME" ]
+  local serve_env expected
+  serve_env=$(tr '\0' '\n' <"/proc/$SERVE_PID/environ")
+  for expected in "HOME=$ARTIFACT_HOME" "XDG_CONFIG_HOME=$T/xdg/config" \
+    "TERN_CONFIG_DIR=$T/config" "TERN_DAEMON_SOCKET=$T/daemon.sock" \
+    "XDG_STATE_HOME=$T/xdg/state" "XDG_DATA_HOME=$T/xdg/data" \
+    "XDG_CACHE_HOME=$T/xdg/cache" "STENCIL_FIXTURE_ROOT=$T/crates/tern"; do
+    grep -Fxq "$expected" <<<"$serve_env"
+  done
+  case "${KVFILE:?}" in "$T"/*) ;; *) return 1 ;; esac
+  jq -e --arg fake "$T/bin/hc" '.hc_path == $fake' "$KVFILE" >/dev/null
+  grep -q '^ls --json' "$T/state/invocations.log"
   check_lua "${probe}artifact_source = p; assert(root.p.herd_cursor == 't81')"
   artifact_wait t81 3
   local base
-  base=$(jq -Rn --arg value "$T/artifacts/.scratch/" '$value')
+  base=$(jq -Rn --arg value "$ARTIFACT_ROOT/.scratch/" '$value')
   check_lua "${artifact_root}assert(not a.error and a.matches[1].path == $base .. 'report.md' and a.matches[2].path == $base .. 'review-001.md' and a.matches[3].path == $base .. 'brief.md')"
   [ "$(artifact_find_count)" -eq 1 ]
+  echo "artifacts isolation: serve HOME=$ARTIFACT_HOME; real cwd=$ARTIFACT_ROOT; missing cwd=$ARTIFACT_MISSING; private XDG/config/socket and exact fake hc/KV verified; rendered selected card uses ~/code/shop/.worktrees/cart-totals without /tmp/herd-shoot"
 }
 artifact_find_count() {
   if [ -f "$T/state/find.log" ]; then grep -c '^find ' "$T/state/find.log" || true; else printf '0\n'; fi
@@ -277,7 +327,7 @@ artifact_buttons() {
 }
 artifact_open() {
   local path heading
-  path=$(jq -Rn --arg value "$T/artifacts/$2" '$value')
+  path=$(jq -Rn --arg value "$ARTIFACT_ROOT/$2" '$value')
   heading=$(jq -Rn --arg value "$3" '$value')
   artifact_event "artifact=$1"
   wait_lua "${artifact_root}local file; for _, pane in cx.session:panes() do if pane.kind == 'file' and pane.path == $path then file = pane.pane end end; assert(file and cx.session:focused() == file); local read = cx.session:read(file, {lines=40}); assert(read.kind == 'file' and read.path == $path and string.find(table.concat(read.lines, '\n'), $heading, 1, true)); artifact_document = file"
@@ -339,7 +389,7 @@ artifact_review_selection() {
   ctl key Home >/dev/null
   artifact_wait t81 3
   local path
-  path=$(jq -Rn --arg value "$T/artifacts/.scratch/$1" '$value')
+  path=$(jq -Rn --arg value "$ARTIFACT_ROOT/.scratch/$1" '$value')
   check_lua "${artifact_root}assert(not a.error and a.matches[2].path == $path)"
   artifact_open 2 ".scratch/$1" "$2"
 }
@@ -366,8 +416,8 @@ case "$ACTION_CASE" in
     ;;
   artifact-mtime)
     artifact_initialize
-    review001=$T/artifacts/.scratch/review-001.md
-    review999=$T/artifacts/.scratch/review-999.md
+    review001=$ARTIFACT_ROOT/.scratch/review-001.md
+    review999=$ARTIFACT_ROOT/.scratch/review-999.md
     second=$(date +%s)
     touch -d "@$second.000000001" "$review001"
     touch -d "@$second.000000002" "$review999"
@@ -429,7 +479,7 @@ case "$ACTION_CASE" in
     wait_lua "${artifact_root}local second = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main.p; assert(root.p.herd_selection > artifact_first_epoch and second.herd_selection > artifact_second_epoch and cx.session:focused() == artifact_config_focus)"
     artifact_wait t81 1
     artifact_wait_second 1 Checklist
-    check_lua "${artifact_root}assert(a.matches[1].label == 'Checklist' and a.matches[1].path == $(jq -Rn --arg value "$T/artifacts/.scratch/brief.md" '$value'))"
+    check_lua "${artifact_root}assert(a.matches[1].label == 'Checklist' and a.matches[1].path == $(jq -Rn --arg value "$ARTIFACT_ROOT/.scratch/brief.md" '$value'))"
     artifact_open 1 .scratch/brief.md '# Fictional cart brief'
     check_lua "${artifact_root}artifact_before_reload_at = a.at"
     ctl plugins fixtures >/dev/null

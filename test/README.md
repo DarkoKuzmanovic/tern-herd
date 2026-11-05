@@ -28,13 +28,13 @@ cd ~/code/tern-herd
 | `--size WxH` | viewport in CSS px (`resize W H`), e.g. `700x900`. Default: the serve's own, 1280x800 |
 | `--keys "TOKEN …"` | `tern ctl key` tokens, `dblclick:CSS` selectors, or pause tokens `wait:MS` / `sleep:MS` (below); selectors cannot contain spaces |
 | `SHOOT_KEEP=1` | keep the run's temp dir and leave the serve running (it prints the control socket); stop it yourself |
-| `SHOOT_HOOK='…'` | run a strict shell snippet after the fake-hc assertion, with `$TEST`, `$T` (temp dir), `$SOCK` (control socket), `$TERNFD` (the `tern` binary) and `$KVFILE` (the already validated private plugin-storage file) set; failure fails the run |
+| `SHOOT_HOOK='…'` | run a strict shell snippet after the fake-hc assertion, with `$TEST`, `$T` (temp dir), `$SOCK` (control socket), `$TERNFD` (the `tern` binary), `$KVFILE` (the already validated private plugin-storage file) and `$SERVE_PID` set; artifact runs also provide `$ARTIFACT_HOME`, `$ARTIFACT_ROOT`, `$ARTIFACT_MISSING` (empty otherwise); failure fails the run |
 | `SHOOT_PLUGIN_DIR=DIR` | test a private plugin working copy instead of the linked source |
 | `SHOOT_CONTENDER=1` | load a second independent copy of the production window VM against the same host requests |
 | `SHOOT_NO_CONSUMER=1` | load a bootstrap-only window half; no action consumer, for expiry and manual claim tests |
 | `SHOOT_WORKTREE=1` | replace fixture cwd values in the temporary copy with a new private git repository for `w` |
 | `SHOOT_PHASED=1` | copy the fixture privately before starting Tern, park `seq/` as `phases/`, and hold phase 01 until a hook atomically promotes another snapshot; never edits repository fixtures |
-| `SHOOT_ARTIFACTS=1` | copy `artifacts` fixture/files privately, rewrite local cwd values to real private directories, set review mtimes deterministically, and log genuine GNU `find` calls; repository fixtures are unchanged |
+| `SHOOT_ARTIFACTS=1` | copy `artifacts` fixture/files under `$T/home/alex`, use real private checkout cwd values and an artifact-only serve `HOME`/`XDG_CONFIG_HOME`, set review mtimes deterministically, and log genuine GNU `find` calls; repository fixtures and other scenarios' environments are unchanged |
 
 ### `sleep:MS` vs `wait:MS`
 
@@ -86,6 +86,10 @@ every run gets its own everything:
 - its own `TERN_CONFIG_DIR`, `XDG_STATE_HOME`, `XDG_DATA_HOME`,
   `XDG_CACHE_HOME` under `<tmp>`, so `tern.kv` (`hc_path`, scope state, activity) written by
   the block lands in the run's state, never in `~/.local/state/tern/plugin-data`;
+- artifact-enabled runs additionally set only their serve's `HOME` to
+  `<tmp>/home/alex` and `XDG_CONFIG_HOME` to `<tmp>/xdg/config`, overriding any
+  inherited config-home path; the harness/hook `HOME`, live checksum roots and
+  every other scenario's environment remain unchanged;
 - `STENCIL_FIXTURE_ROOT=<tmp>/crates/tern`, so the plugin is loaded from the
   run's copy of `plugins/herd`, not the linked one;
 - a fake `hc` first on `PATH`, as `<tmp>/bin/hc` (a wrapper that bakes the
@@ -478,13 +482,35 @@ complete terminal audit.
 
 Artifact cases run with `SHOOT_ARTIFACTS=1` and the real production permission
 mailbox, filesystem helper, native configuration prompt and `cx.docs:open`.
-The copied fixture's local cwd fields point to `<tmp>/artifacts` and
-`<tmp>/artifacts-missing`; the source fixture retains fictional paths. Actual
-fixture file contents are copied into the former, and mtimes explicitly make
-`review-001.md` newer than `review-999.md`. A private PATH wrapper logs argv
-then runs `/usr/bin/find` unchanged. It never invents matches or context
-replies. Native file-pane paths and readable content, not a mocked open result,
-prove a document opened.
+The copied fixture's local cwd fields point to real private checkouts:
+
+- `ARTIFACT_HOME=$T/home/alex`
+- `ARTIFACT_ROOT=$ARTIFACT_HOME/code/shop/.worktrees/cart-totals`
+- `ARTIFACT_MISSING=$ARTIFACT_HOME/code/shop/.worktrees/checkout-layout`
+
+`shoot.sh` passes these shared variables to hooks; hooks must reuse them for
+actual-file, native-document, mtime and stale-discovery assertions. Fixture
+contents are copied into `$ARTIFACT_ROOT/.scratch` (no symlinks or old-path
+aliases), while the missing peer is an empty directory. The source fixture
+retains its fictional paths. Only this serve gets `HOME=$ARTIFACT_HOME` and a
+private `XDG_CONFIG_HOME`, so the unchanged production host's native HOME-based
+tilde handling renders `~/code/shop/.worktrees/cart-totals` in the selected card.
+No plugin, source or display-text rewriting is used.
+
+All six artifact cases inspect the actual serve's `/proc/$SERVE_PID/environ`
+(Linux) to prove its private HOME, config, XDG and socket settings, check physical
+checkout paths under `$T`, and reassert exact `hc_path == "$T/bin/hc"` in private
+KV plus a real fake-`hc` list invocation. They require the selected card's
+rendered text to contain the expected tilde worktree and no `/tmp/herd-shoot`
+prefix, including the missing checkout when selected. This reads only native
+card text nodes, not inert surface metadata or absolute internal path properties.
+The harness's original fake candidate pin and pre-hook KV guard are unchanged.
+
+Mtimes explicitly make `review-001.md` newer than `review-999.md`. A private PATH
+wrapper logs argv then runs `/usr/bin/find` unchanged; its stale-selection hold
+targets `$ARTIFACT_ROOT`. It never invents matches or context replies. Native
+file-pane paths and readable content, not a mocked open result, prove a document
+opened.
 Configuration is a global window preference: saving requires no Herd pane,
 console focus or host configuration mailbox. Discovery and document opens
 still use the real local-host permission path.
