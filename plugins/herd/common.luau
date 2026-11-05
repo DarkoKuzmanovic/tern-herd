@@ -1,13 +1,10 @@
 --!strict
--- Shared by both halves: the block kind, the `herd://` links the block opens
--- to ask the window half for things only a window can do (split a pane, ask
--- for text, confirm), and quoting.
+-- Shared block identity, the inert host/window action mailbox, and quoting.
 
 local M = {}
 
 M.KIND = "herd.herd"
 M.OPEN_ACTION = "plugin.herd.open"
-M.SCHEME = "herd://"
 
 -- `hc` by name first, then where it is installed: a daemon started by systemd
 -- or a desktop launcher often has a PATH without ~/.local/bin.
@@ -28,45 +25,17 @@ end
 M.KV_HC = "hc_path"
 M.KV_SUMMARY = "summary"
 
--- Percent-encodes everything but unreserved URL characters.
-function M.encode(s: string): string
-	return (string.gsub(s, "[^%w%-%._~]", function(c: string): string
-		return string.format("%%%02X", string.byte(c))
-	end))
-end
-
-function M.decode(s: string): string
-	return (string.gsub(s, "%%(%x%x)", function(h: string): string
-		return string.char(tonumber(h, 16) :: number)
-	end))
-end
-
--- `herd://<verb>/<address>[/<label>]`, each part percent-encoded. Verbs:
--- watch, attach, send, interrupt (an hc address) and worktree (whose
--- "address" is the terminal's working directory).
-function M.link(verb: string, address: string, label: string?): string
-	local url = M.SCHEME .. verb .. "/" .. M.encode(address)
-	if label then
-		url ..= "/" .. M.encode(label)
-	end
-	return url
-end
-
--- The verb, address and label of a `herd://` link; nil for any other URL.
-function M.parse(url: string): (string?, string?, string?)
-	if string.sub(url, 1, #M.SCHEME) ~= M.SCHEME then
-		return nil, nil, nil
-	end
-	local verb, rest = string.match(string.sub(url, #M.SCHEME + 1), "^([%w_]+)/(.+)$")
-	if not verb or not rest then
-		return nil, nil, nil
-	end
-	local addr, label = string.match(rest, "^([^/]+)/([^/]+)$")
-	if addr and label then
-		return verb, M.decode(addr), M.decode(label)
-	end
-	return verb, M.decode(rest), nil
-end
+-- Carried as inert root-node metadata, never as a URL/open effect. The
+-- serial host worker grants each request to one window before it acts.
+export type WindowRequest = {
+	id: string,
+	verb: string,
+	address: string,
+	label: string,
+	hc: string,
+	expires: number,
+	owner: string?,
+}
 
 -- One POSIX shell word.
 function M.quote(s: string): string

@@ -13,11 +13,9 @@
 -- m mutes the toasts, r refreshes now, Esc closes the logs, then the focus.
 -- Only s and x change anything, and the window half asks before either.
 --
--- What only a window can do (split a pane, ask for text, confirm, open a
--- git block) goes through a `herd://` link the window half's link route
--- claims; a confirmed send or interrupt comes back as a `herd_send=…` /
--- `herd_interrupt=…` action event, and this half checks it again and runs
--- `hc`.
+-- Window-only work travels as inert surface metadata. Windows claim a
+-- request through an event; this serial worker grants it to just one.
+-- Confirmed send/interrupt events are still checked against the latest list.
 --
 -- The selected terminal's card adds `hc get <address> --json` (model, start
 -- time, exit code): fetched 200 ms after the selection settles, at most once
@@ -183,6 +181,7 @@ type State = {
 	detail_timer: TimerHandle?,
 	logs: Logs?,
 	notice: Notice?,
+	requests: { common.WindowRequest },
 }
 
 -- A pane id survives a block restart; the state object identifies this run.
@@ -191,6 +190,7 @@ local running: { [number]: State } = {}
 -- The hc that last started, and what the kv store last heard.
 local hc_path: string? = nil
 local last_summary = ""
+local request_serial = 0
 
 local function str(v: any): string?
 	return if type(v) == "string" and v ~= "" then v else nil
@@ -1835,8 +1835,29 @@ local function toggle_mute(state: State)
 	set_notice(state, if state.muted then "Toasts muted." else "Toasts on.", "muted")
 end
 
--- Asks the window half (through its link route) to do `verb` for the
--- selected terminal.
+local function enqueue_window(state: State, verb: string, address: string, label: string)
+	request_serial += 1
+	local request: common.WindowRequest = {
+		id = tostring(tern.now()) .. ":" .. request_serial,
+		verb = verb, address = address, label = label,
+		hc = hc_path or "hc", expires = tern.now() + 5000,
+	}
+	table.insert(state.requests, request)
+	tern.timer(5000, function()
+		if not alive(state) then return end
+		for i, pending in state.requests do
+			if pending.id == request.id then
+				table.remove(state.requests, i)
+				set_notice(state, "No Herd window completed " .. verb .. " for " .. label .. "; try again.", "warning")
+				state.cx:render()
+				break
+			end
+		end
+	end)
+end
+
+-- Ask one window to do `verb` for the selected terminal. Never broadcast an
+-- open effect: replicas without window.luau would launch a system browser.
 local function ask_window(state: State, cx: BlockCx, verb: string)
 	local t = selected(state)
 	if not t then
@@ -1861,10 +1882,10 @@ local function ask_window(state: State, cx: BlockCx, verb: string)
 			set_notice(state, "hc reports no working directory for " .. label_of(term) .. ".", "muted")
 			return
 		end
-		cx:open(common.link(verb, term.cwd, short_of(term)))
+		enqueue_window(state, verb, term.cwd, short_of(term))
 		return
 	end
-	cx:open(common.link(verb, term.address, label_of(term)))
+	enqueue_window(state, verb, term.address, label_of(term))
 end
 
 -- Button clicks, and `herd_send=<json {address, text}>` /
@@ -1872,6 +1893,22 @@ end
 -- confirmed. A confirmed action is checked again against the latest list:
 -- the terminal may have finished while the dialog was open.
 local function on_action(state: State, cx: BlockCx, act_name: string, value: string?)
+	if (act_name == "herd_claim" or act_name == "herd_ack") and value then
+		local ok, claim = pcall(tern.json.decode, value)
+		if ok and type(claim) == "table" and type(claim.owner) == "string" then
+			for i, request in state.requests do
+				if request.id == claim.id and tern.now() < request.expires then
+					if act_name == "herd_claim" and request.owner == nil then
+						request.owner = claim.owner
+					elseif act_name == "herd_ack" and request.owner == claim.owner then
+						table.remove(state.requests, i)
+					end
+					break
+				end
+			end
+		end
+		return
+	end
 	if act_name == "retry" or act_name == "refresh" then
 		refresh(state)
 	elseif act_name == "finished" then
@@ -1959,6 +1996,7 @@ tern.block.define("herd", {
 			detail_timer = nil,
 			logs = nil,
 			notice = nil,
+			requests = {},
 		}
 		running[cx.pane] = state
 		refresh(state)
@@ -2043,7 +2081,7 @@ tern.block.define("herd", {
 			table.insert(main, ui.node("skeleton", { key = "view", shape = "rows", rows = 6 }))
 		end
 		return {
-			main = ui.node("col", { role = "herd.console" }, {
+			main = ui.node("col", { role = "herd.console", herd_requests = state.requests }, {
 				ui.node("col", { key = "page", role = "herd.page", gap = "lg" }, main),
 			}),
 			dock = if state.terms then dock_view(state, compact) else nil,

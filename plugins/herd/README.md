@@ -249,14 +249,27 @@ terminals that finish while `h` is off just leave the table.
   wins). Answers are cached per address and dropped when the terminal leaves
   the list. Rendering never starts a process.
 - A host block can't split panes, open dialogs or open a git block; only the
-  window half can. The block opens a `herd://<verb>/<address>/<label>` link
-  with `cx:open`; `window.luau` claims it in `tern.route.link` and, on the
-  next tick, opens the split (`cx.layout:split`), asks (`cx:prompt`,
-  `cx:pick`) or opens the git block (`cx.git:open(cwd, {how = "beside"})`;
-  for `worktree` the link's address is the directory). A confirmed send or
-  interrupt goes back to the block as an action event
-  (`cx.session:event(block, {act = "herd_send=<json>"})`), and the host checks
-  it against the latest list before running `hc`.
+  window half can. It queues a request in inert main-region metadata.
+  `window.luau` reads only that root (`cx.session:surface`, depth 0, one node)
+  and asks the serial host worker to claim a request. The host grants it to
+  the first claimant; only that window acknowledges and executes the split,
+  prompt, picker or git open. Other replicas, including clients without the
+  window plugin, do nothing. No internal action uses a URL or system opener.
+  Unlike a file-local kv queue, surface metadata also reaches remote replicas;
+  unlike kv get/set, the host's claim arbitration is not a read/write race.
+- Action discovery reads the root at 10 Hz per Herd block in the current
+  session (no descendants or table cells). It stops when no Herd block exists;
+  pane/focus lifecycle events wake it. Tern exposes no surface-update event,
+  so this small steady-state read bounds the two-poll claim/grant latency.
+  Windows with the console focused claim immediately; others defer 200 ms.
+  The API does not expose which window originated a host key or row event,
+  so focus is a preference, not a guarantee about the originating replica.
+- Acknowledgements clear requests. Uncompleted requests expire after 5 s
+  with a dock notice, so a missing consumer or a window closing mid-request
+  does not wedge the queue. Requests are not saved across block restarts;
+  a fresh window VM identity cannot replay its predecessor's grant. A
+  confirmed send or interrupt still returns through `cx.session:event`,
+  and the host rechecks it against the latest list before running `hc`.
 - The status segment reads counts the host writes to `tern.kv` (`summary`:
   working, blocked, errors; only when they change) on a 3-second window timer,
   and shows only while a Herd block is open in the window.
@@ -272,6 +285,12 @@ terminals that finish while `h` is off just leave the table.
   hc's own remote machines (`hc machine`) appear as rows (`machine/t7`) when
   hc lists them, and unreachable ones as warning cards. `w` refuses remote
   terminals: `cx.git` reads local repositories only, and is desktop-only.
+- Window-only actions need at least one desktop replica with Herd's window
+  half installed and the console's session open. A web client runs no Lua:
+  without a capable replica, actions expire with a notice rather than
+  launching a browser. With multiple capable replicas, one executes each
+  action; a crash between acknowledgement and execution can lose that action,
+  but it is never replayed automatically. Try it again explicitly.
 - Finished terminals: see the caveat under Toasts.
 - `tern plugin list` reports the host half only: a syntax error in
   `window.luau` shows up as a log warning (`plugin window entry failed to
@@ -286,6 +305,8 @@ From the repository root, use the isolated fixture harness:
 ./test/shoot.sh --size 472x1240 demo
 ./test/shoot.sh --keys "2" demo
 ./test/shoot.sh --keys "sleep:2100" transitions
+./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
+./test/actions.sh
 ```
 
 Screenshots are written to `test/shots/`. See [the test harness README](../../test/README.md)

@@ -7,6 +7,11 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 ## [Unreleased]
 
+### Fixed
+
+- Watching a terminal by double-click or keyboard no longer also opens a system browser
+  or duplicates the action when another Tern client is attached.
+
 ## [0.2.1] - 2026-11-05
 
 First public release.

@@ -191,8 +191,19 @@ shoot_one() {
 
   mkdir -p "$T/crates/tern" "$T/crates/plugins/fixtures" "$T/bin" "$T/xdg/state" \
     "$T/xdg/data" "$T/xdg/cache" "$T/config" "$T/shots"
-  cp -r "$REPO/plugins/herd" "$T/crates/plugins/fixtures/herd"
+  cp -r "${SHOOT_PLUGIN_DIR:-$REPO/plugins/herd}" "$T/crates/plugins/fixtures/herd"
 
+  if [ -n "${SHOOT_WORKTREE:-}" ]; then
+    cp -r "$fix" "$T/fixture"
+    fix=$T/fixture
+    mkdir -p "$T/worktree"
+    git -C "$T/worktree" init -q
+    while IFS= read -r -d '' file; do
+      jq --arg cwd "$T/worktree" 'walk(if type == "object" and has("cwd") then .cwd = $cwd else . end)' \
+        "$file" >"$file.tmp"
+      mv "$file.tmp" "$file"
+    done < <(find "$fix" -name '*.json' -print0)
+  fi
 
   # The fake hc, with the fixture baked in: tern.process.run keeps only the env
   # it is given, so the paths must not depend on the serve process's env.
@@ -208,6 +219,32 @@ shoot_one() {
     echo "shoot[$scen]: FAIL: could not pin the fake hc in the plugin copy" >&2
     return 1
   fi
+  if [ -n "${SHOOT_NO_CONSUMER:-}" ]; then
+    cp "$TEST/no-consumer.luau" "$T/crates/plugins/fixtures/herd/window.luau"
+  elif [ -n "${SHOOT_CONTENDER:-}" ]; then
+    # A second independent window VM consumes the same mirrored surface.
+    # It uses the production consumer unchanged, including host arbitration.
+    mkdir -p "$T/crates/plugins/fixtures/contender"
+    cp "$T/crates/plugins/fixtures/herd/"{window,common}.luau "$T/crates/plugins/fixtures/contender/"
+    printf '%s\n' 'schema = 1' 'id = "herd-contender"' 'name = "Test contender"' \
+      'version = "0.0.0"' 'window = "window.luau"' >"$T/crates/plugins/fixtures/contender/plugin.toml"
+  fi
+
+  # No desktop opener may escape this isolated process. Headless Tern also
+  # records native shell requests (including ones that never spawn a process).
+  mkdir -p "$T/state"
+  {
+    echo '#!/bin/bash'
+    printf 'printf "external-open %%q" "${0##*/}" >>%q\n' "$T/state/actions.log"
+    printf 'printf " %%q" "$@" >>%q\n' "$T/state/actions.log"
+    printf 'printf "\\n" >>%q\n' "$T/state/actions.log"
+    echo 'exit 0'
+  } >"$T/bin/external-open"
+  chmod +x "$T/bin/external-open"
+  for opener in xdg-open gio kde-open kde-open5 gnome-open sensible-browser \
+    x-www-browser google-chrome google-chrome-stable chromium firefox; do
+    ln -s external-open "$T/bin/$opener"
+  done
 
   ctl() { "$TERN" ctl --control "$sock" "$@"; }
 
@@ -218,6 +255,8 @@ shoot_one() {
     XDG_DATA_HOME=$T/xdg/data \
     XDG_CACHE_HOME=$T/xdg/cache \
     PATH=$T/bin:$PATH \
+    BROWSER=$T/bin/external-open \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=$T/no-session-bus \
     HERD_FIXTURE=$fix \
     HERD_FIXTURE_STATE=$T/state \
     "$TERN" serve --control "$sock" --out "$T/shots" >"$T/serve.log" 2>&1 &
@@ -271,11 +310,6 @@ shoot_one() {
     echo "shoot[$scen]: WARNING: could not zoom the Herd pane; the block keeps its split" >&2
   fi
 
-  # Debug hook: SHOOT_HOOK='…' runs with T, SOCK and TERN set, its output shown.
-  if [ -n "${SHOOT_HOOK:-}" ]; then
-    (T=$T SOCK=$sock TERNFD=$TERN eval "$SHOOT_HOOK") >"$T/hook.out" 2>&1 || true
-    sed 's/^/  hook: /' "$T/hook.out" >&2
-  fi
   [ -n "${SHOOT_KEEP:-}" ] && echo "shoot[$scen]: kept $T (control socket $sock)" >&2
 
   # Readiness: the tree holds still for two polls and, when the fixture has an
@@ -321,6 +355,15 @@ shoot_one() {
   fi
   echo "shoot[$scen]: hc_path is the run's fake hc"
 
+  # Hooks may drive only this run, and only after fake-hc isolation is proven.
+  if [ -n "${SHOOT_HOOK:-}" ]; then
+    if ! TEST=$TEST T=$T SOCK=$sock TERNFD=$TERN bash -euo pipefail -c "$SHOOT_HOOK" >"$T/hook.out" 2>&1; then
+      sed 's/^/  hook: /' "$T/hook.out" >&2
+      return 1
+    fi
+    sed 's/^/  hook: /' "$T/hook.out" >&2
+  fi
+
   if [ -n "$KEYS" ]; then
     for encoded in $KEYS; do
       case "$encoded" in
@@ -340,6 +383,13 @@ shoot_one() {
             *) sleep "$(printf '%d.%03d' $((ms / 1000)) $((ms % 1000)))" ;;
           esac
           ;;
+        dblclick:*)
+          ctl dblclick "${encoded#dblclick:}" >"$T/key.out" 2>&1 || {
+            echo "shoot[$scen]: double-click $encoded failed:" >&2
+            sed 's/^/  /' "$T/key.out" >&2
+            return 1
+          }
+          ;;
         *)
           if ! ctl key "$encoded" >"$T/key.out" 2>&1; then
             echo "shoot[$scen]: key $encoded failed:" >&2
@@ -352,6 +402,7 @@ shoot_one() {
     prev=""
     stable=0
     for _ in $(seq 1 75); do
+      ctl wait 100 >/dev/null
       now=$(ctl tree 2>/dev/null || true)
       if [ "$now" = "$prev" ] && [ -n "$now" ]; then stable=$((stable + 1)); else stable=0; fi
       prev=$now
@@ -384,6 +435,12 @@ shoot_one() {
     cat "$T/state/actions.log" 2>/dev/null || echo "(none)"
   } >"$OUT/$name.hc.log"
   printf '%s\n' "$tree" >"$OUT/$name.tree.txt"
+  ctl system >"$OUT/$name.system.json"
+  if grep -q '^external-open ' "$T/state/actions.log" 2>/dev/null ||
+    jq -e 'any(.log[]?; .op == "open-url" or .op == "open-file" or .op == "reveal")' "$OUT/$name.system.json" >/dev/null; then
+    echo "shoot[$scen]: FAIL: external opener requested (see $name.hc.log and $name.system.json)" >&2
+    return 1
+  fi
 
   if ! grep -q '^ls ' "$T/state/invocations.log" 2>/dev/null; then
     echo "shoot[$scen]: FAIL: the fake hc was never asked for a list, so the block showed something else (real hc?)" >&2

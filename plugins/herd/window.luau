@@ -1,8 +1,7 @@
 --!strict
--- The window half: the "Open herd console" command and its key, the
--- `herd://` link route the block uses for what only a window can do (open an
--- `hc attach` split, ask for a prompt, confirm, open a worktree's git
--- block), and a status segment "herd N working" while a Herd block is open.
+-- Window-only actions use the block's inert surface mailbox, not URL effects.
+-- The host grants each request to one window, even with multiple replicas.
+-- This half also owns the palette command, key and status segment.
 
 local common = require("./common")
 
@@ -44,19 +43,14 @@ tern.command({
 
 tern.bind(if tern.runtime.os == "macos" then "cmd+alt+shift+h" else "ctrl+alt+shift+h", ACTION)
 
-local function hc(): string
-	local ok, path = pcall(tern.kv.get, common.KV_HC)
-	return if ok and type(path) == "string" and path ~= "" then path else "hc"
-end
-
 local function preview(text: string): string
 	local one = string.gsub(text, "%s+", " ")
 	return if #one > 80 then string.sub(one, 1, 79) .. "…" else one
 end
 
 -- Opens `hc attach` on `address` in a split right of `beside`.
-local function attach(cx: WindowCx, beside: number, address: string, observe: boolean)
-	local line = common.quote(hc()) .. " attach "
+local function attach(cx: WindowCx, beside: number, address: string, observe: boolean, binary: string)
+	local line = common.quote(binary) .. " attach "
 	if observe then
 		line ..= "--observe --history 200 "
 	end
@@ -126,37 +120,87 @@ local function open_worktree(cx: WindowCx, path: string, label: string)
 	end
 end
 
-tern.route.link(function(link: LinkRequest, cx: WindowCx): RouteDecision?
-	local verb, address, label = common.parse(link.url)
-	if verb == nil or address == nil then
-		return nil
+local function dispatch(cx: WindowCx, pane: number, request: common.WindowRequest)
+	local verb, address, name = request.verb, request.address, request.label
+	if verb == "watch" or verb == "attach" then
+		attach(cx, pane, address, verb == "watch", request.hc)
+	elseif verb == "send" then
+		ask_send(cx, pane, address, name)
+	elseif verb == "interrupt" then
+		ask_interrupt(cx, pane, address, name)
+	elseif verb == "worktree" then
+		open_worktree(cx, address, name)
 	end
-	local name = label or address :: string
-	local pane = link.pane
-	-- Splitting and opening dialogs can outlast the route hook's budget on a
-	-- cold start; claim the link now and do the work on the next tick.
-	tern.timer(0, function(tcx: WindowCx?)
-		if tcx == nil then
-			return
+end
+
+-- A fresh VM identity prevents a reload from executing its old grant again.
+-- Window keys alone are not unique across machines; include this VM's nonce.
+local nonce = tostring({}) .. ":" .. tostring(tern.now())
+local completed: { [string]: boolean } = {}
+local waiting: { [string]: number } = {}
+local request_timer: TimerHandle? = nil
+local REQUEST_MS = 100
+
+local function poll_requests(cx: WindowCx?)
+	request_timer = nil
+	if cx == nil then return end
+	local wcx: WindowCx = cx
+	local tabs: { [number]: boolean } = {}
+	for _, session in wcx.session:sessions() do
+		if session.current then
+			for _, tab in session.tabs do tabs[tab] = true end
 		end
-		local wcx: WindowCx = tcx
-		if verb == "watch" then
-			attach(wcx, pane, address :: string, true)
-		elseif verb == "attach" then
-			attach(wcx, pane, address :: string, false)
-		elseif verb == "send" then
-			ask_send(wcx, pane, address :: string, name)
-		elseif verb == "interrupt" then
-			ask_interrupt(wcx, pane, address :: string, name)
-		elseif verb == "worktree" then
-			-- The link's "address" is the working directory.
-			open_worktree(wcx, address :: string, name)
-		else
-			wcx:toast("error", "Unknown herd link", link.url)
+	end
+	local found = false
+	local present: { [string]: boolean } = {}
+	local owner = wcx:window_key() .. ":" .. nonce
+	for _, pane in wcx.session:panes() do
+		if (pane.block == KIND or pane.block == "plugin." .. KIND) and pane.tab and tabs[pane.tab] then
+			found = true
+			-- Root props only: no descendants, rendered text or full-table read.
+			local surface = wcx.session:surface(pane.pane, { root = "main", depth = 0, nodes = 1 })
+			local root = if type(surface) == "table" then surface.main else nil
+			local requests = if root and root.p then root.p.herd_requests else nil
+			if type(requests) == "table" then
+				for _, request in requests do
+					present[request.id] = true
+					local claim = tern.json.encode({ id = request.id, owner = owner })
+					if request.owner == owner and not completed[request.id] then
+						completed[request.id] = true
+						wcx.session:event(pane.pane, { ev = "action", id = "main", act = "herd_ack=" .. claim })
+						dispatch(wcx, pane.pane, request)
+					elseif request.owner == nil then
+						local since = waiting[request.id]
+						if since == nil then
+							since = tern.now()
+							waiting[request.id] = since
+						end
+						-- Prefer a window with the console focused. No API
+						-- identifies which replica originated the host input.
+						if pane.focused or tern.now() - since >= 200 then
+							wcx.session:event(pane.pane, { ev = "action", id = "main", act = "herd_claim=" .. claim })
+						end
+					end
+				end
+			end
 		end
-	end)
-	return { handled = true }
-end)
+	end
+	for id in completed do if not present[id] then completed[id] = nil end end
+	for id in waiting do if not present[id] then waiting[id] = nil end end
+	if found then request_timer = tern.timer(REQUEST_MS, poll_requests) end
+end
+
+local function wake_requests(_ev: any, cx: WindowCx)
+	if request_timer == nil then poll_requests(cx) end
+end
+
+-- No action polling without a Herd block in this session; lifecycle/focus
+-- wakes it. There is no surface-update event, so a visible console needs a
+-- cheap 10 Hz root-prop read to keep the claim/grant round trip responsive.
+tern.on("pane_created", wake_requests)
+tern.on("focus", wake_requests)
+tern.on("tab_created", wake_requests)
+request_timer = tern.timer(0, poll_requests)
 
 -- Status segment: counts the host half publishes in kv while a Herd block
 -- polls, read on a timer (formatters must stay pure and fast).

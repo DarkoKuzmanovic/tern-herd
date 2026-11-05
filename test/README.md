@@ -18,14 +18,20 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "j j l" demo                      # a row further down (no read fixture -> error card)
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
+./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
+./test/actions.sh                                      # actions, arbitration, expiry and opener guard
 ```
 
 | option | meaning |
 | --- | --- |
 | `--size WxH` | viewport in CSS px (`resize W H`), e.g. `700x900`. Default: the serve's own, 1280x800 |
-| `--keys "TOKEN …"` | tokens sent to the focused block with `tern ctl key` before the shot. Two pause tokens instead of a key: `wait:MS` and `sleep:MS` (below) |
+| `--keys "TOKEN …"` | `tern ctl key` tokens, `dblclick:CSS` selectors, or pause tokens `wait:MS` / `sleep:MS` (below); selectors cannot contain spaces |
 | `SHOOT_KEEP=1` | keep the run's temp dir and leave the serve running (it prints the control socket); stop it yourself |
-| `SHOOT_HOOK='…'` | run a shell snippet after the block opens, with `$T` (temp dir), `$SOCK` (control socket) and `$TERNFD` (the `tern` binary) set; its output is shown |
+| `SHOOT_HOOK='…'` | run a strict shell snippet after the fake-hc assertion, with `$TEST`, `$T` (temp dir), `$SOCK` (control socket) and `$TERNFD` (the `tern` binary) set; failure fails the run |
+| `SHOOT_PLUGIN_DIR=DIR` | test a private plugin working copy instead of the linked source |
+| `SHOOT_CONTENDER=1` | load a second independent copy of the production window VM against the same host requests |
+| `SHOOT_NO_CONSUMER=1` | load a bootstrap-only window half; no action consumer, for expiry and manual claim tests |
+| `SHOOT_WORKTREE=1` | replace fixture cwd values in the temporary copy with a new private git repository for `w` |
 
 ### `sleep:MS` vs `wait:MS`
 
@@ -35,7 +41,7 @@ tokens pause differently, and only one of them lets that poll happen:
 | token | what it does | use it for |
 | --- | --- | --- |
 | `sleep:7000` | really sleeps 7 s in the harness, then the settle loop waits for what got painted | anything that depends on the host's own timers: a `seq/` fixture advancing (`transitions`), a notice expiring, the "finished hidden" count moving |
-| `wait:3000` | `tern ctl wait 3000`: advances the serve's **simulated app clock** only | Tern-side animations/transitions that run on app time. It does **not** fire the block's 2 s poll, so `hc.log` gains no `ls` calls |
+| `wait:3000` | `tern ctl wait 3000`: advances the serve's **simulated app clock**, including window request polling | Window-side timers and animations. It does **not** fire the block's real-time 2 s poll, so `hc.log` gains no `ls` calls |
 
 Proof of the difference, `transitions` (4 `seq/` answers):
 
@@ -58,6 +64,7 @@ with spaces and colons as `_`/`-`):
 | `<name>.layout.json` | Tern's own layout JSON for that frame (every element's box), as the `shot` command writes it |
 | `<name>.tree.txt` | the element tree the shot was taken from (what readiness waited for) |
 | `<name>.hc.log` | every fake-`hc` invocation of the run, then the actions (`send`/`interrupt`/…) the block ran |
+| `<name>.system.json` | Tern's native system-action log; external URL/file/reveal requests fail the run |
 
 The block opens **beside** the serve's startup shell, so the harness zooms its
 pane (`tern` world command `zoom`) until the tab is zoomed on the Herd pane
@@ -83,16 +90,32 @@ every run gets its own everything:
   hangs, and removes `<tmp>`;
 - **the fake pinned as the plugin's own `hc`** (below), because `PATH` alone
   does not reach the panes the block splits;
+- fake `xdg-open`, `gio`, `kde-open`, `kde-open5`, `gnome-open`,
+  `sensible-browser`, `x-www-browser`, `google-chrome`, `google-chrome-stable`,
+  `chromium` and `firefox` first on `PATH`, plus a fake `BROWSER`: they log
+  argv to `actions.log` and exit harmlessly; any call fails the run;
+- an invalid private `DBUS_SESSION_BUS_ADDRESS`, preventing the usual
+  session-bus desktop portal path from reaching the real desktop;
 - `tern ctl shot` writes inside `<tmp>/shots`, and the harness copies the PNG
   out: nothing is written to `~/target` or `target/shots/tern`.
+
+The headless platform records its native `open-url`, `open-file` and `reveal`
+operations in `ctl system`, even when it does not execute an OS opener. Every
+successful screenshot run must have neither those operations nor fake opener
+calls. `actions.sh` deliberately triggers each guard and checks it fails.
+These are headless and PATH/session-bus defenses, not a syscall sandbox: they
+do not intercept an arbitrary absolute browser executable or a program that
+deliberately reconnects to the real D-Bus address. Never run a live-window
+reproduction or send input to a real terminal.
 
 ### Why the fake is pinned in the plugin copy (`hc_path`)
 
 The host half resolves `hc` from a candidate list (`M.HC` in
 `plugins/herd/common.luau`: the bare name `"hc"`, then absolute paths) and
-caches the winner in `tern.kv` as `hc_path`. The **window** half then turns that
-string into a pane command: `Enter` runs `<hc_path> attach --observe --history
-200 ADDR`, `a` runs `<hc_path> attach ADDR`. A split pane's shell gets the
+caches the winner in `tern.kv` as `hc_path`. Each action request carries that
+resolved path to the **window** half, which turns it into a pane command:
+`Enter` runs `<hc_path> attach --observe --history 200 ADDR`, `a` runs
+`<hc_path> attach ADDR`. A split pane's shell gets the
 **login** environment, not the serve's `PATH`, so a cached `"hc"` would resolve
 to the user's real `~/.local/bin/hc` — a headless test would attach to a live
 herd, and with `a` its keys would go into a real builder.
@@ -199,6 +222,7 @@ Shipped fixtures:
 | `transitions` | `seq/01…04`: builders working → blocked → done, one finishing (`state: finished`) |
 | `degraded` | one good list, then `hc ls` fails: the last list with the dock's warning over it |
 | `remote` | the live herd plus a terminal on another machine, `build-box/t10` (address with a `/`, agent `bash`, cwd `/home/alex`, **no status**), and `machines[]` reporting `build-box` unreachable with `why`; `t43 b9-drafts` working. Its `get` takes `get/build-box/t10.delay` 12 s then `get/build-box/t10.exit` 1 + a `cannot reach build-box` error JSON, so the selected remote row's card shows the load, then `hc get timed out after 10 s.` |
+| `activation` | fictional `spam-192` at `t44`, plus `cart #2 (review/ready)` at `build-box/t45`; action regression data, not a live terminal |
 
 Fake data is modelled on the real thing: `hc ls --json` is
 `{hidden_finished, machines:[{name,since_ms,state,why}], terminals:[{address,agent,cwd,state,status,turn,where,name?,parent?}]}`
@@ -221,6 +245,26 @@ warning and shoots anyway — if the redesign renames UI text, change the fixtur
 `expect` to something from the data (an address, a name, `hidden_finished`).
 `transitions` sequences are stateful per run: each invocation starts at `01`.
 
+### Action regression checks
+
+`./test/actions.sh` checks Enter and name-cell double-click each create exactly
+one watch split, writable attach, confirmed send/interrupt, and a private git
+worktree open. It measures key/click-to-visible-split wall time (limit 400 ms)
+and simulated app time. It also checks acknowledgement clearing, first-claim
+arbitration, refusal of another owner's acknowledgement, reload discarding
+in-flight state, and a 5-second dock notice for missing/abandoned consumers.
+Every normal run must pass the native/PATH opener guard.
+
+`tern serve` is a standalone headless window, not a daemon session to which a
+second real client can attach. The competing-consumer test instead loads a
+second **independent VM running the unmodified production window half**;
+both discover and claim the same production host mailbox. The focused
+claim/ack tests also send two owners through the real serial host event
+handler. This covers arbitration, not remote transport or a second OS window.
+Headless `ctl carly lua` is used only for direct assertions/events; it does not
+start an assistant process. The hook pumps the simulated clock for window
+polling while using real sleeps for host expiry.
+
 ## How it drives a headless Tern
 
 1. Copy `plugins/herd` into `<tmp>/crates/plugins/fixtures/herd` (the fixture
@@ -236,11 +280,12 @@ warning and shoots anyway — if the redesign renames UI text, change the fixtur
 5. Wait for readiness: poll `ctl tree` until it is non-empty, unchanged for two
    consecutive polls and matching `expect`, at most 30 s. Then assert the block's
    `kv.json` says `hc_path == "<tmp>/bin/hc"`; fail before any key otherwise.
-6. `--keys`: `ctl key COMBO` per token, `sleep:MS` for a real pause (so the host's
-   2 s poll runs) or `wait:MS` for the simulated clock, then wait for the tree
-   to settle again.
+6. Run the optional strict `SHOOT_HOOK`, then `--keys`: `ctl key COMBO` or
+   `ctl dblclick CSS`, `sleep:MS` for a real pause or `wait:MS` for the simulated
+   clock. Pump the simulated clock in 100 ms steps while settling the tree.
 7. `ctl shot herd` (writes `<tmp>/shots/serve/herd.png` and `.layout.json`, and
-   replies with both paths), copy them out, write `.tree.txt` and `.hc.log`.
+   replies with both paths), copy them out, write `.tree.txt`, `.hc.log` and
+   `.system.json`; fail if either opener guard recorded an external action.
 8. `ctl quit`, wait for the process, `rm -rf <tmp>` — always, via `EXIT` trap in
    the per-scenario subshell.
 

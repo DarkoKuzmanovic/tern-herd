@@ -1,0 +1,6 @@
+{
+  "address":"t44", "argv":["hermes"], "created_ms":1793865673513,
+  "cwd":"/home/alex/code/shop", "name":"spam-192", "parent":"t1n",
+  "labels":{}, "state":"live", "status":{"app":"hermes","state":"working"},
+  "turn":5
+}

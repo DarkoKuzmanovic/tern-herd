@@ -1,0 +1,8 @@
+{
+  "hidden_finished": 0,
+  "machines": [],
+  "terminals": [
+    {"address":"t44","agent":"hermes","cwd":"/home/alex/code/shop","name":"spam-192","parent":"t1n","state":"live","status":"working","turn":5,"where":"shop / 1"},
+    {"address":"build-box/t45","agent":"codex","cwd":"/home/alex/code/shop","name":"cart #2 (review/ready)","state":"live","status":"working","turn":1,"where":"shop / 2"}
+  ]
+}
