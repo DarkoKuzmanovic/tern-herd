@@ -43,13 +43,13 @@ These show made-up data from the isolated test harness, never a real work sessio
 
 ## Install
 
-After this repository is published, Tern's supported GitHub-subdirectory syntax is:
+Install directly from GitHub:
 
 ```sh
 tern plugin install github.com/DarkoKuzmanovic/tern-herd/plugins/herd
 ```
 
-That command is checked against `tern plugin --help`, but cannot be exercised until the repository exists. To work from a checkout instead, clone this repository and enter its root, then:
+Verified on 2026-11-05 with Tern 0.9.12 in an isolated configuration: Herd 0.2.1 installed with no problems. To work from a checkout instead, clone this repository and enter its root, then:
 
 ```sh
 tern plugin link plugins/herd
