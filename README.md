@@ -93,7 +93,8 @@ It focuses an existing Herd block or opens one beside the current pane. Agents r
 The daemon half polls `hc ls --json` every two seconds and builds the terminal tree.
 It looks for `hc` on PATH, then in `$HOME/.local/bin`, `/usr/local/bin` and `/usr/bin`.
 Only the selected terminal gets an `hc get` request; logs are read only when asked.
-The window half opens splits, git blocks and confirmation dialogs through `herd://` links.
+The block posts each action request where only window halves with the plugin can see it.
+Exactly one of them claims it and opens the split, git block or dialog; no link goes to another client, so nothing reaches a system browser.
 The host rechecks confirmed send/interrupt actions against its latest terminal list.
 Status counts cross to the window through Tern's local key-value store; no separate server is added.
 Finished terminals can disappear between polls; [the guide explains which finishes can toast](plugins/herd/README.md#toasts).
