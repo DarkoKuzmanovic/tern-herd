@@ -16,7 +16,7 @@ all connected   one per terminal   most 104 · t1n     hidden · h shows
 
  All   Needs you 1   Working   Done
 Parents before their children · 9 of 9                  ┌ b1-cart  t3n          [Watch ⏎] ┐
-Terminal              Agent    Status          Turn  Worktree │ Status    working · for 14m  │
+Terminal              Agent    Status          Turn  Worktree │ Status working · for 14m (from hc) │
 t1n                   hermes   ● done            104 shop     │ Agent     codex              │
 ├─ b1-cart  t3n       codex    ● working 14m       1 cart     │ Model     gpt-6-astra        │
 ├─ b2-checkout t3p    codex    ● blocked  2m       2 checkout │ Worktree  ~/code/shop/…/cart │
@@ -85,12 +85,12 @@ Views):
 - **The selected terminal's card**: beside the table in a wide pane, under it
   in a narrow one. Head: the name, address and agent icon, with the one
   primary action, **Watch** (Enter). Facts: status with how long and where
-  that age comes from — `for 12m, per hc` is `hc get`'s own `status_ms` (when
-  hc still reports the same word), `for 3m, seen here` is a change this block
-  saw between two polls, and `since unknown` is neither (never `created_ms`);
+  that age comes from — `for 12m (from hc)` is `hc get`'s own `status_ms`
+  (when hc still reports the same word), `for 3m (seen by Herd)` is a change
+  this block saw between two polls, and `age unknown` is neither (never `created_ms`);
   the blocked kind; what the
   program says, agent (and the foreground program when it differs), model
-  (from the command line's `-m`/`--model`), turn, started (relative),
+  (from the command line's `-m`/`--model`, or `—` when unknown), turn, started (relative),
   exit code / signal / reason once finished, parent, number of children,
   full worktree path, where, and the `run` label. Until the first `hc get`
   answers, the facts start with a shimmering fetching message
@@ -99,10 +99,13 @@ Views):
   `fetching…`; after a failure they say what is missing and hc's error shows
   under them. Its buttons come in fixed
   groups: **Attach**, **Logs**, **Send…** (what reaches the terminal), then
-  **Worktree** and **Focus** (where to look), **Float Watch**, **Dock Watch**
-  and **Park Watch** (read-only viewer layout), **Report**, **Review** and
-  **Brief** (existing local artifacts), then **Interrupt…** alone at the end
-  of its own row. A button that can't apply is disabled with the reason.
+  **Worktree** and **Focus** (where to look), then applicable read-only viewer
+  controls: tiled shows **Float Watch** / **Park Watch**, floating shows
+  **Dock Watch** / **Park Watch**, absent or parked shows none. Only matching
+  local **Report**, **Review** and **Brief** artifact buttons appear, then
+  **Interrupt…** alone at the end of its own row. Other inapplicable buttons
+  are disabled with a reason. Hidden viewer controls do not disable their keys:
+  an inapplicable key action reports a notice in the dock.
 - **Logs card**: `l` reads the last 40 lines once (`hc read <t> --lines 40`)
   into a card under the view, in a box half the pane tall that opens at the
   newest line and scrolls up. `l` again reads again; nothing polls it.
@@ -112,10 +115,10 @@ Views):
   Opening does not mark read; **Mark read**, **Clear** and **Back** are explicit
   controls. The bounded list scrolls and the head stays available.
 - **Dock**: a one-line notice (sent, interrupted, refused, left the list),
-  the refresh problem while a stale list shows, and a legend of only the keys
-  that have no button on screen: ↑↓ select, Home/End jump, Enter watch,
-  1–4/Tab filter and `[`/`]` previous/next needs-you (every other action shows
-  its keycap on its button).
+  the refresh problem while a stale list shows, and a compact navigation
+  legend: ↑↓ select, Home/End jump, Enter watch, 1–4/Tab filter and `[`/`]`
+  previous/next needs-you. Visible action buttons show their keycaps; hidden
+  viewer buttons do not remove the `p`/`d`/`z` shortcuts documented below.
 
 ### Width
 
@@ -201,9 +204,9 @@ focuses the block.
 | u | choose All terminals or a remembered/typed run label without reopening |
 | Enter / o (or double-click a row) | focus the existing read-only Watch viewer, or open `hc attach --observe --history 200 <t>` to the right; unpark it if hidden. Nothing you type reaches the agent and the terminal isn't resized |
 | a | attach: always open a new writable `hc attach <t>` split, to type into it |
-| p | float the selected terminal's read-only Watch viewer as a peek/PiP; open one if absent |
-| d | dock the selected terminal's existing Watch viewer; no viewer means an explicit notice |
-| z | park the selected terminal's existing Watch viewer without stopping its program |
+| p | float the selected terminal's read-only Watch viewer as a peek/PiP; open one if absent; already floating or parked gives a dock notice |
+| d | dock the selected terminal's floating Watch viewer; absent, already tiled or parked gives a dock notice |
+| z | park the selected terminal's existing Watch viewer without stopping its program; absent or already parked gives a dock notice |
 | l | logs: `hc read <t> --lines 40` once into a card; `l` again re-reads |
 | s | send: asks for a prompt, asks again to confirm, then runs `hc send <t> <text>` (never `--force`) |
 | x | interrupt: asks to confirm, then runs `hc interrupt <t>`. Refused for done, idle and finished terminals, and checked again after you confirm |
@@ -228,13 +231,24 @@ Watch reuses only viewers created by Herd with the same window, source Tern
 host/session, resolved `hc` executable, terminal address and read-only mode.
 It never guesses from a title or changing foreground command, and never reuses
 a writable Attach for Watch. **Float Watch**, **Dock Watch** and **Park Watch**
-also target only that registered read-only viewer. Dock/park do not create a
-missing viewer. A parked viewer is unparked before Watch/float/dock use it.
+also target only that registered read-only viewer. Card controls reflect its
+native layout: tiled → Float/Park; floating → Dock/Park; absent or parked →
+none. The `p`, `d` and `z` keys remain active and report inapplicable actions in
+the dock; `p` alone may create an absent read-only viewer. Dock/park never create
+one, and a parked viewer requires Watch to unpark it.
 Closing a viewer removes its registry entry; the next Watch creates a new one.
 The bounded registry survives plugin reloads (up to 64 records); stale, exited,
 native or moved-to-another-host/session panes are pruned. Unknown or ambiguous
 ownership is refused, not guessed. Layout controls only affect Tern's disposable
 view: no stop, send or interrupt reaches the hc terminal.
+
+One window replica is the authoritative viewer-state reporter for a console.
+Other replicas cannot erase its controls with an unrelated empty registry or
+replace its viewer notices. Native layout changes update that reporter's state
+on the existing window ticks/lifecycle events. Its renewable three-second lease
+is checked by normal host polling; if the reporter disappears, ownership and
+controls expire and another capable replica can claim. Reload may briefly
+hide controls while the new reporter reestablishes the actual native state.
 
 ### Local artifacts
 
@@ -244,7 +258,9 @@ Defaults are `.scratch/report.md`, `.scratch/review-*.md` and
 `.scratch/brief.md`, relative to hc's working directory. Review chooses the
 greatest actual filesystem modification time (including nanoseconds), not the
 greatest filename; equal mtimes use a deterministic lexical path tie-break.
-Missing files remain disabled. Herd never creates reports, briefs or review files.
+Missing files have no buttons; partial matches show only existing artifacts,
+retaining each configured spec's original action index. Remote selections have
+no artifact buttons. Herd never creates reports, briefs or review files.
 
 Choose **Configure Herd artifacts** (`plugin.herd.artifacts`) in the palette.
 It presents the saved JSON array directly, without opening, focusing or
@@ -329,11 +345,16 @@ one before presenting the picker; restoring that console later does not reopen
 the picker. Choose **All terminals**, one of the 12 recent run labels, or
 **Enter run label…**. Opening the picker makes one
 `hc --json` request: unlike the reduced `hc ls --json` projection, the bare
-JSON command retains `Terminal.labels`, so live run labels can be discovered
-without per-row `get` polling. At most 12 distinct labels join the recent list.
-Labels found in cached selected-terminal details are remembered too.
-This is not a complete inventory: finished/removed runs and unreachable
-machines can be absent. If discovery fails, remembered and typed labels work.
+JSON command retains `Terminal.labels`, so available run labels can be discovered
+without per-row `get` polling. Installed hc **0.1.18** was verified to return
+`{commands, hidden_finished, machines, terminals}`, with full terminal records,
+object/null status and labels objects. The inspected live and retained finished
+records contained **no `labels.run`**, so this confirms the discovery source,
+not an observed live run-label result. Fictional fixtures exercise actual
+run-label discovery and scoped rows. At most 12 distinct labels join the recent
+list; cached selected-terminal labels are remembered too. Discovery is not a
+complete inventory: finished/removed runs and unreachable machines can be absent.
+If discovery fails, remembered and typed labels work.
 The current scope appears in the head, tab title and status segment.
 
 The block saves its scope; `run=<id>` is only the initial default. Scope

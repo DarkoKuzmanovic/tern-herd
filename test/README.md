@@ -187,7 +187,7 @@ run prove it, so a PNG can never come from the real herdr-core.
 | file | the fake `hc` answers |
 | --- | --- |
 | `ls.json` | `hc ls --json` |
-| `full.json` | bare `hc --json`: full list envelope with terminal `labels`, used once when the run picker is requested; falls back to root `ls.json`, without advancing any list sequence/failure counter |
+| `full.json` | bare `hc --json`: full object envelope with `commands`, `hidden_finished`, `machines` and complete terminal records/labels, used once per requested run picker; fallback root `ls.json` is normalized to the same full shape without advancing any list sequence/failure counter |
 | `ls-all.json` | `hc ls --all --json` (falls back to `ls.json`) |
 | `seq/01.json`, `02.json`, … | one file per `ls` call, sticking on the last: status transitions over 2-second polls |
 | `ls.exit` | exit with this code (on stderr: `ls.stderr`). Combined with `ls.fail-after N`, the first N calls succeed and later ones fail |
@@ -214,9 +214,20 @@ directory. Their counters live under the run's private
 scope's sequence.
 
 `full.json` is the unfiltered full-list response for cheap run-label discovery.
-Its `terminals[]` entries keep `labels: {"run":"…"}` and the full status object,
-unlike the short `ls.json` rows. This file is at the fixture root, never under a
-particular scope: discovering another run must not depend on the current run.
+The fake preserves explicit names, argv and `labels: {"run":"…"}` while producing
+the observed hc 0.1.18 object envelope: `commands`, `hidden_finished`, `machines`,
+`terminals`. Terminal records contain the complete full-field set, nested
+`foreground: {argv,cwd,name,pid}`, object/null `status`, and number/null `status_ms`,
+not the short `ls.json` projection. Short fallback fixtures are normalized too.
+This file is at the fixture root, never under a particular scope: discovering
+another run must not depend on the current run.
+
+Installed hc 0.1.18 was verified to support bare `hc --json` with this envelope and
+labels objects; `hc --json --all` is invalid. None of the inspected real live or
+retained finished records had `labels.run`. This verifies the discovery source,
+not a live specific-run result. The `scopes` fixture supplies fictional cart and
+checkout labels (plus an unlabelled retained shell) for behavioral coverage;
+there is no fallback discovery command or per-row `get` sweep.
 
 `hc get` itself takes no run label. Keep shared/canonical address details under
 the fixture root's `get/`; these always win. Addresses present only in a scoped
@@ -300,9 +311,11 @@ pane-id registry and native layout APIs:
   Two writable Attach requests create separate panes; a later Watch still
   chooses the original read-only pane, not either writable attach.
 - `viewer-reload`: reloading fixture plugins preserves the actual read-only
-  pane identity and bounded persisted registry; Watch does not attach again.
-- `viewer-closed`: a genuinely closed viewer is replaced exactly once, and
-  subsequent Watch reuses its replacement.
+  pane identity and bounded persisted registry; the card's tiled controls
+  converge after reload, and Watch does not attach again.
+- `viewer-closed`: a genuinely closed viewer first removes all viewer controls,
+  then is replaced exactly once with tiled controls, and subsequent Watch
+  reuses its replacement.
 - `viewer-replaced`: an unrelated `/bin/cat` terminal sets a matching OSC
   title, but is never adopted as a viewer. A native document replaces the
   real viewer's presentation; the test explicitly closes any old terminal
@@ -311,27 +324,61 @@ pane-id registry and native layout APIs:
 - `viewer-layout`: native `p` creates/floats a missing read-only viewer;
   `d` docks it and `z` parks it. The test asserts real
   `PaneInfo.floating`/`parked`/`tab` flags and that the pane has not exited.
-  Watch unparks/reuses it. The Float/Dock/Park host controls exercise the
-  same production path without another fake attach.
-- `viewer-missing`: Dock must show the explicit no-Watch notice rather than
-  moving a writable Attach pane. Park must acknowledge without moving it,
-  adding panes or attaching again; an identical native toast may be deduped.
-  A later Watch opens separately.
+  Rendered card action IDs must agree with `herd_viewer.state` and pane identity:
+  absent/parked → no viewer controls; tiled → Float/Park; floating → Dock/Park.
+  Already floating `p`, already tiled `d`, parked `p`/`d` and already parked `z`
+  still dispatch and show the explicit dock notices without changing layout.
+  Watch unparks/reuses the pane. The visible Float/Dock/Park host controls
+  exercise the same production path without another fake attach.
+  These new notice assertions use a real five-second deadline, matching the
+  mailbox bound, rather than a count of `ctl wait`/tree loops. Passive tracing
+  showed the host publishing a grant immediately while the next native window
+  timer callback arrived 1.78–2.03 seconds later despite a 100 ms schedule.
+  No stale root, cancelled timer, rejected notice or synthetic consumer was
+  involved. These cases still use the production window's real timers; they
+  assert completion, not a subsecond wake-up guarantee.
+- `viewer-missing`: with no viewer, and with only a writable Attach, all viewer
+  card controls must be absent. Dock and Park each show
+  `No Watch viewer for spam-192 (t44). Open Watch first.` in the dock, without moving
+  that writable pane, adding panes or attaching again. A changed notice between
+  keys proves both refusals independently. A later Watch opens separately.
+  The actual selected card must show unknown `Model` as `—` and `age unknown`.
+- `viewer-reporter`: an actual Watch establishes `herd_viewer_owner`. Matching
+  generation/selection/address/hc reports, claims and notices from a different
+  owner must not erase its controls or replace the dock notice. Continuous
+  checks span ordinary window ticks. Native float/dock/park calls outside the
+  mailbox must update the rendered controls; reload, Watch unpark, native close
+  and replacement must converge with exactly two real fake-hc attaches total.
+- `viewer-lease`: a **protocol-only**, no-consumer run manually grants a reporter
+  and reports `none`; it does not invent a viewer pane or mock a layout result.
+  The granted owner reserves a read-viewer request: a foreign mailbox claim is
+  refused, its own claim/ack succeeds, and the real host poll expires the
+  abandoned three-second lease before a successor can claim. A second request
+  holds its original execution grant across reporter expiry, within its native
+  five-second request lifetime. The new reporter must neither regrant nor
+  acknowledge it; only the original owner's delayed ACK clears it. Explicit
+  lifetime assertions fail an overdue observation instead of accepting a
+  naturally expired request as no-replay evidence. No terminal action may run.
+  This tests host provenance and failover, not remote transport.
 
-These cases never mock registry lookups, claims, acknowledgements or layout
-results. Native keys are sent only after refocusing the console; the fake
-viewer processes remain harmless. Fake-hc logs must contain only the expected
-read-only/writable attaches, never send, interrupt, keys, kill or removal.
+Native viewer cases never mock registry lookups or layout results; their
+creation/reuse flows use the production mailbox. Only the explicitly named
+provenance/lease checks submit protocol events to exercise rejection and expiry.
+Native keys are sent only after refocusing the console; fake viewer processes
+remain harmless. Fake-hc logs contain only expected read-only/writable attaches,
+never send, interrupt, keys, kill or removal; the lease case permits no attaches.
 All viewer waits use ordinary native timers: the cold-scope-only adapter is
 not enabled or broadened. Existing opener guards remain mandatory.
 
 Run just the viewer cases:
 
 ```sh
-for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing; do
+for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing viewer-reporter; do
   ACTION_CASE=$action SHOOT_SCOPE_OPEN_DRAIN=0 \
     SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh activation
 done
+ACTION_CASE=viewer-lease SHOOT_NO_CONSUMER=1 SHOOT_SCOPE_OPEN_DRAIN=0 \
+  SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh activation
 ```
 
 The competing-consumer setup copies every production Luau dependency into its
@@ -353,6 +400,10 @@ one bare `hc --json` request makes the unselected checkout builder's run label
 available without requesting that builder's `get`. Selecting the discovered
 choice must change the actual rows and scope summary. A later normal host poll
 must not issue another full-list discovery request.
+The separate fixture-shape assertion checks all four full-envelope keys, the
+complete terminal-key set, foreground/labels types, object/null status and the
+fictional `cart`/`checkout` run labels. It does not imply those labels existed in
+the installed live data.
 
 Reload cases assert `pane_scopes` and the 12-entry `recent_scopes` MRU persist.
 Pending-request cases switch scopes with an unconsumed request, with real
@@ -442,6 +493,10 @@ never changes during a test.
   without marking read. Root `herd_activity`, `herd_unread`, `herd_inbox` and
   `herd_summary.unread` agree with metadata-only entries; unread keeps the
   native status segment visible after the last active terminal disappears.
+  Selected-card text also distinguishes hc's matching `status_ms` as
+  `for AGE (from hc)` from the subsequent blocked change as
+  `for AGE (seen by Herd)`; unknown Model is `—`. These assertions read actual
+  native card text, not diagnostic metadata.
 - `activity-persistence` explicitly marks read, observes another event, and
   reloads the production plugin to assert the same IDs/read markers remain.
   It inspects only the private persisted ledger for forbidden terminal
@@ -497,12 +552,12 @@ private `XDG_CONFIG_HOME`, so the unchanged production host's native HOME-based
 tilde handling renders `~/code/shop/.worktrees/cart-totals` in the selected card.
 No plugin, source or display-text rewriting is used.
 
-All six artifact cases inspect the actual serve's `/proc/$SERVE_PID/environ`
+All seven artifact cases inspect the actual serve's `/proc/$SERVE_PID/environ`
 (Linux) to prove its private HOME, config, XDG and socket settings, check physical
 checkout paths under `$T`, and reassert exact `hc_path == "$T/bin/hc"` in private
 KV plus a real fake-`hc` list invocation. They require the selected card's
-rendered text to contain the expected tilde worktree and no `/tmp/herd-shoot`
-prefix, including the missing checkout when selected. This reads only native
+rendered text to contain the expected tilde worktree and no `/tmp/` path,
+including the missing checkout when selected. This reads only native
 card text nodes, not inert surface metadata or absolute internal path properties.
 The harness's original fake candidate pin and pre-hook KV guard are unchanged.
 
@@ -525,8 +580,14 @@ still use the real local-host permission path.
   pre-epoch pair checks GNU find's signed-floor-seconds/positive-fraction
   ordering when GNU `touch` and the private filesystem preserve those times;
   unsupported pre-epoch precision is explicitly reported as a skipped subcase.
+- `artifact-partial` saves four specs through the native preference prompt:
+  missing slots 1/3, existing Review/Brief slots 2/4. Exactly the rendered
+  `artifact=2` and `artifact=4` controls may exist, and those original actions
+  must open the exact private Review/Brief paths and text. The missing
+  `artifact=1` action still refuses to open; filtering never renumbers buttons.
 - `artifact-missing-remote` selects the empty local cwd and asserts all three
-  match slots lack paths and cannot open. The remote hc row yields an explicit
+  match slots lack paths, **zero rendered artifact buttons**, and no open.
+  The remote hc row likewise has zero artifact buttons and yields an explicit
   local-only error with zero further `find` calls or file panes. A changed
   notice is the barrier before testing its separate refusal.
 - `artifact-config` queries the native command palette for
@@ -566,7 +627,7 @@ from the covered remote **hc address** refusal.
 Run just the artifact cases:
 
 ```sh
-for action in artifact-open artifact-mtime artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
+for action in artifact-open artifact-mtime artifact-partial artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
   ACTION_CASE=$action SHOOT_ARTIFACTS=1 SHOOT_SCOPE_OPEN_DRAIN=0 \
     SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh artifacts
 done

@@ -15,9 +15,10 @@ for action in watch-unfocused doubleclick-unfocused; do run_case "$action"; done
 for action in arbitration abandoned reload expire; do
   SHOOT_NO_CONSUMER=1 run_case "$action"
 done
-for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing; do
+for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing viewer-reporter; do
   run_case "$action"
 done
+SHOOT_NO_CONSUMER=1 run_case viewer-lease
 for action in scope-fixtures scope-discovery scope-ui scope-open scope-reload scope-confirm-send scope-confirm-interrupt scope-confirm-finished scope-detail scope-summary; do
   run_case "$action" scopes
 done
@@ -28,7 +29,7 @@ done
 for action in activity-events activity-persistence activity-shared-scopes activity-scope-order; do
   SHOOT_PHASED=1 run_case "$action" activity
 done
-for action in artifact-open artifact-mtime artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
+for action in artifact-open artifact-mtime artifact-partial artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
   SHOOT_ARTIFACTS=1 run_case "$action" artifacts
 done
 # Both native shell recording and PATH interception must fail closed.

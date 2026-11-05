@@ -20,6 +20,13 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 - Minimum Tern version is now 0.9.12, whose native host identity and viewer
   layout APIs are verified for viewer reuse and float/dock/park.
+- Selected-card artifact links now appear only for existing local files, and
+  viewer controls reflect whether Watch is tiled, floating or parked. Inapplicable
+  layout keys explain why in the dock; writable Attach panes remain separate.
+- Unknown models show `—`; status ages explicitly distinguish hc timestamps,
+  changes seen by Herd and unknown ages.
+- Viewer controls and notices stay with their owning window replica instead of
+  being overwritten by unrelated clients; ownership recovers after reload or a lost reporter.
 
 ## [0.2.2] - 2026-11-05
 

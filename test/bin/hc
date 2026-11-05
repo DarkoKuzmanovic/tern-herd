@@ -45,15 +45,51 @@ cmd="${1:-}"
 case "$cmd" in
 --json)
   [ $# -eq 0 ] || die_usage "--json $*"
-  # Bare hc --json keeps full terminal fields (including labels), unlike
-  # the short ls projection. Discovery does not advance any polling sequence.
+  # Bare hc --json on 0.1.18 has this object envelope and FULL terminal
+  # records, not the ls projection. Normalize short fallback fixtures too;
+  # discovery must not advance a polling sequence or failure counter.
   f="$fixture/full.json"
   [ -f "$f" ] || f="$fixture/ls.json"
   if [ ! -f "$f" ]; then
     echo "{\"error\":{\"kind\":\"error\",\"message\":\"fixture $fixture has no full.json or ls.json\"}}" >&2
     exit 1
   fi
-  cat "$f"
+  jq '
+    {
+      commands: ["hc run <cmd>", "hc ls", "hc read <t>", "hc attach <t>", "hc --skill"],
+      hidden_finished: (.hidden_finished // 0),
+      machines: [.machines[]? | {
+        host: (.host // .name), id: (.id // .name), name,
+        session: (.session // null), state, target: (.target // .name),
+        temporary: (.temporary // false), version: (.version // "0.1.18"),
+        via: (.via // false)
+      }],
+      terminals: [.terminals[]? |
+        . as $t |
+        {
+          address, argv: (.argv // [(.agent // "bash")]),
+          cols: (.cols // 120), created_ms: (.created_ms // 1793865600000),
+          cwd, die_with_parent: (.die_with_parent // false),
+          exit_code: (.exit_code // null), finished_ms: (.finished_ms // null),
+          foreground: (if (.foreground | type) == "object" then .foreground else {
+            argv: (.argv // [(.agent // "bash")]), cwd, name: (.agent // "bash"),
+            pid: (.pid // 4100)
+          } end),
+          identity: (.identity // ("fixture-" + .address)), keep: (.keep // false),
+          labels: (.labels // {}), name: (.name // null), notify: (.notify // false),
+          parent: (.parent // null), pid: (.pid // 4100),
+          reason: (.reason // null), reported: (if has("reported") then .reported else .status != null end),
+          rm: (.rm // false), rows: (.rows // 40), screen: (.screen // ""),
+          signal: (.signal // null), state,
+          status: (if (.status | type) == "object" then .status
+            elif (.status | type) == "string" then {app: ($t.agent // "bash"), state: .status}
+            else null end),
+          status_ms: (.status_ms // null), template: (.template // null),
+          title: (.title // .name // .address), turn: (.turn // 0)
+        }
+      ]
+    }
+  ' "$f"
   ;;
 ls)
   all=0

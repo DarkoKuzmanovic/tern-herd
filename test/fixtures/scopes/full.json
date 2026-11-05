@@ -1,24 +1,51 @@
 {
+  "commands": ["hc run <cmd>", "hc ls", "hc read <t>", "hc attach <t>", "hc --skill"],
   "hidden_finished": 3,
   "machines": [],
   "terminals": [
     {
-      "address":"t61", "agent":"codex", "argv":["codex","--no-daemon"],
-      "cwd":"/home/alex/code/shop/.worktrees/cart", "name":"b1-cart",
-      "labels":{"run":"cart"}, "state":"live", "status":{"app":"codex","state":"working"},
-      "turn":4, "where":"shop / cart"
+      "address":"t61", "argv":["codex","--no-daemon"], "cols":120,
+      "created_ms":1793865600000, "cwd":"/home/alex/code/shop/.worktrees/cart",
+      "die_with_parent":false, "exit_code":null, "finished_ms":null,
+      "foreground":{"argv":["codex","--no-daemon"],"cwd":"/home/alex/code/shop/.worktrees/cart","name":"codex","pid":4161},
+      "identity":"fixture-cart", "keep":false, "labels":{"run":"cart"},
+      "name":"b1-cart", "notify":false, "parent":null, "pid":4161,
+      "reason":null, "reported":true, "rm":false, "rows":40, "screen":"",
+      "signal":null, "state":"live", "status":{"app":"codex","state":"working"},
+      "status_ms":1793865900000, "template":null, "title":"Cart totals", "turn":4
     },
     {
-      "address":"t62", "agent":"codex", "argv":["codex","--no-daemon"],
-      "cwd":"/home/alex/code/shop/.worktrees/checkout", "name":"b2-checkout",
-      "labels":{"run":"checkout"}, "state":"live", "status":{"app":"codex","state":"blocked"},
-      "turn":2, "where":"shop / checkout"
+      "address":"t62", "argv":["codex","--no-daemon"], "cols":120,
+      "created_ms":1793865600000, "cwd":"/home/alex/code/shop/.worktrees/checkout",
+      "die_with_parent":false, "exit_code":null, "finished_ms":null,
+      "foreground":{"argv":["codex","--no-daemon"],"cwd":"/home/alex/code/shop/.worktrees/checkout","name":"codex","pid":4162},
+      "identity":"fixture-checkout", "keep":false, "labels":{"run":"checkout"},
+      "name":"b2-checkout", "notify":false, "parent":null, "pid":4162,
+      "reason":null, "reported":true, "rm":false, "rows":40, "screen":"",
+      "signal":null, "state":"live", "status":{"app":"codex","state":"blocked"},
+      "status_ms":1793865900000, "template":null, "title":"Checkout layout", "turn":2
     },
     {
-      "address":"t63", "agent":"codex", "argv":["codex","--no-daemon"],
-      "cwd":"/home/alex/code/shop/.worktrees/review", "name":"b3-review",
-      "labels":{}, "state":"live", "status":{"app":"codex","state":"error"},
-      "turn":1, "where":"shop / review"
+      "address":"t63", "argv":["codex","--no-daemon"], "cols":120,
+      "created_ms":1793865600000, "cwd":"/home/alex/code/shop/.worktrees/review",
+      "die_with_parent":false, "exit_code":null, "finished_ms":null,
+      "foreground":{"argv":["codex","--no-daemon"],"cwd":"/home/alex/code/shop/.worktrees/review","name":"codex","pid":4163},
+      "identity":"fixture-review", "keep":false, "labels":{},
+      "name":"b3-review", "notify":false, "parent":null, "pid":4163,
+      "reason":null, "reported":true, "rm":false, "rows":40, "screen":"",
+      "signal":null, "state":"live", "status":{"app":"codex","state":"error"},
+      "status_ms":1793865900000, "template":null, "title":"Cart review", "turn":1
+    },
+    {
+      "address":"t64", "argv":["bash"], "cols":120,
+      "created_ms":1793865600000, "cwd":"/home/alex/code/shop",
+      "die_with_parent":false, "exit_code":0, "finished_ms":1793865900000,
+      "foreground":{"argv":["bash"],"cwd":"/home/alex/code/shop","name":"bash","pid":4164},
+      "identity":"fixture-shell", "keep":false, "labels":{},
+      "name":null, "notify":false, "parent":null, "pid":4164,
+      "reason":"exited", "reported":false, "rm":false, "rows":40, "screen":"",
+      "signal":null, "state":"finished", "status":null,
+      "status_ms":null, "template":null, "title":"shop shell", "turn":0
     }
   ]
 }

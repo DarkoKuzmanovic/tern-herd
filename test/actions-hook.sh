@@ -18,6 +18,17 @@ wait_text() {
   echo "missing UI: $1" >&2
   return 1
 }
+wait_viewer_notice() {
+  # ctl wait advances the headless clock, not the window timer's wall clock.
+  # Use the mailbox's real five-second bound, not a count of fast tree reads.
+  local deadline=$((SECONDS + 5))
+  while ((SECONDS < deadline)); do
+    pump
+    if ctl tree | grep -F "$1" >/dev/null; then return 0; fi
+  done
+  echo "missing viewer notice within mailbox deadline: $1" >&2
+  return 1
+}
 wait_action() {
   for _ in {1..30}; do
     pump
@@ -188,6 +199,32 @@ activity_metadata() {
   check_lua "${activity_root}local ids = {}; local last = math.huge; for _, e in root.p.herd_activity do assert(type(e.id) == 'number' and not ids[e.id]); ids[e.id] = true; assert(type(e.at) == 'number' and e.at > 1000000000 and e.at <= last); last = e.at; assert(type(e.address) == 'string' and type(e.status) == 'string' and type(e.read) == 'boolean' and type(e.runs) == 'table'); for key in e do assert(table.find({'id','at','address','name','from','status','exit_code','runs','read'},key), 'non-metadata activity field: ' .. key) end end"
 }
 
+# Read visible text from the selected native card, not diagnostic metadata.
+card_words() {
+  ctl tree | jq -r --arg address "$1" '
+    def nodes: ., (.children[]? | nodes);
+    [.tree[]? | nodes
+      | select((.class? // "" | split(" ")) | index("sf-card"))
+      | select(any(nodes; .class? == "sf-card-meta" and .text? == $address))
+      | [nodes | .text? | select(type == "string")] | join(" ")
+    ] | join(" ") | gsub("[[:space:]]+"; " ")
+  '
+}
+wait_card_words() {
+  local words
+  for _ in {1..40}; do
+    pump
+    words=$(card_words "$1")
+    if grep -Eq "$2" <<<"$words"; then
+      [[ "$words" != *'not in its command line'* && "$words" != *'since unknown'* &&
+         "$words" != *', per hc'* && "$words" != *', seen here'* ]]
+      return
+    fi
+  done
+  echo "selected card wording did not settle: $1 $2; ${words:-}" >&2
+  return 1
+}
+
 # Viewer tests always send native keys to the console, never to a viewer's
 # harmless fake attach. They observe real panes/flags and the real mailbox;
 # no registry result, grant, acknowledgement or layout response is mocked.
@@ -198,6 +235,31 @@ viewer_initialize() {
 viewer_press() {
   check_lua "cx.layout:focus(viewer_source)"
   ctl key "$1" >/dev/null
+}
+viewer_controls() {
+  local state=$1 expected pane
+  expected=$(jq -Rn --arg value "$2" '$value')
+  case "$state" in
+    none) pane="assert(root.p.herd_viewer.pane == nil)" ;;
+    tiled) pane="local v = cx.session:pane(viewer_read); assert(v and not v.floating and not v.parked and v.tab and v.exited == nil); assert(root.p.herd_viewer.pane == viewer_read)" ;;
+    floating) pane="local v = cx.session:pane(viewer_read); assert(v and v.floating and not v.parked and v.exited == nil); assert(root.p.herd_viewer.pane == viewer_read)" ;;
+    parked) pane="local v = cx.session:pane(viewer_read); assert(v and v.parked and v.tab == nil and v.exited == nil); assert(root.p.herd_viewer.pane == viewer_read)" ;;
+    *) return 1 ;;
+  esac
+  wait_lua "${viewer_root}assert(root.p.herd_viewer.state == '$state'); $pane; local tree = cx.session:surface(viewer_source,{root='main',depth=16,nodes=2000}).main; local found = {}; local function visit(n) local action = string.match(n.id,'([^%.]+)$'); if action == 'float' or action == 'dock' or action == 'park' then table.insert(found,action); local label = if action == 'float' then 'Float Watch' elseif action == 'dock' then 'Dock Watch' else 'Park Watch'; assert(string.find(tern.json.encode(n),label,1,true)) end; for _, child in n.c or {} do visit(child) end end; visit(tree); table.sort(found); assert(table.concat(found,',') == $expected, 'wrong visible viewer controls')"
+}
+viewer_reject_foreign() {
+  local expected=$1
+  check_lua "${viewer_root}assert(type(root.p.herd_viewer_owner) == 'string' and root.p.herd_viewer_owner ~= ''); viewer_authority = root.p.herd_viewer_owner; local other = viewer_authority .. '-unrelated'; local report = {owner=other,generation=root.p.herd_generation,selection=root.p.herd_selection,address=root.p.herd_cursor,hc=root.p.herd_hc,state='none',text='UNRELATED VIEWER NOTICE MUST NOT SHOW'}; for _, action in {'herd_viewer_claim','herd_viewer_state','herd_viewer_notice'} do cx.session:event(viewer_source,{ev='action',id='main',act=action .. '=' .. tern.json.encode(report)}) end"
+  # Assert continuously across ordinary window ticks, not just eventually.
+  for _ in {1..12}; do
+    pump
+    check_lua "${viewer_root}assert(root.p.herd_viewer_owner == viewer_authority and root.p.herd_viewer.state == '$expected' and root.p.herd_viewer.pane == viewer_read)"
+    if ctl tree | grep -Fq 'UNRELATED VIEWER NOTICE MUST NOT SHOW'; then
+      echo 'unrelated viewer reporter replaced the owner notice' >&2
+      return 1
+    fi
+  done
 }
 viewer_event() {
   local verb_json
@@ -258,7 +320,7 @@ artifact_card() {
       | ($cards | length) > 0
         and all($cards[];
           [nodes | .text? | select(type == "string")] | join("")
-          | (contains("/tmp/herd-shoot") | not)
+          | (contains("/tmp/") | not)
             and (gsub("[[:space:]]+"; "") | contains("~" + $expected)))
     ' >/dev/null; then
       return 0
@@ -321,9 +383,11 @@ artifact_no_documents() {
   [ ! -s "$T/state/actions.log" ]
 }
 artifact_buttons() {
-  local reason
-  reason=$(jq -Rn --arg value "${2:-}" '$value')
-  wait_lua "local tree = cx.session:surface(artifact_source,{root='main',depth=16,nodes=2000}).main; local count = 0; local function visit(n) if string.match(n.id, 'artifact=%d+$') then count += 1; if $reason ~= '' then assert(string.find(tern.json.encode(n), $reason, 1, true)) end end; for _, child in n.c or {} do visit(child) end end; visit(tree); assert(count == $1, 'wrong artifact button count')"
+  local indices
+  indices=$(jq -Rn --arg value "$1" '$value')
+  # Count actual rendered action nodes, not configured specs or disabled flags.
+  # The original spec index is identity even when preceding buttons are absent.
+  wait_lua "local tree = cx.session:surface(artifact_source,{root='main',depth=16,nodes=2000}).main; local found = {}; local function visit(n) local index = string.match(n.id, 'artifact=(%d+)$'); if index then table.insert(found,index) end; for _, child in n.c or {} do visit(child) end end; visit(tree); assert(table.concat(found,',') == $indices, 'wrong visible artifact actions: ' .. table.concat(found,','))"
 }
 artifact_open() {
   local path heading
@@ -407,6 +471,7 @@ artifact_wait_marker() {
 case "$ACTION_CASE" in
   artifact-open)
     artifact_initialize
+    artifact_buttons 1,2,3
     artifact_open 1 .scratch/report.md '# Fictional cart report'
     artifact_open 2 .scratch/review-001.md '# Fictional review 001'
     artifact_open 3 .scratch/brief.md '# Fictional cart brief'
@@ -448,12 +513,31 @@ case "$ACTION_CASE" in
     artifact_no_documents
     echo 'artifact mtime: actual current-epoch 1ns ordering selects review-999 then review-001; equal timestamps choose lexical review-001 through genuine rescans and native document reads'
     ;;
+  artifact-partial)
+    artifact_initialize
+    artifact_buttons 1,2,3
+    # Change only this run's global specs through the native preference prompt.
+    # Missing slots before/between matches must not renumber visible actions.
+    partial='[{"label":"Absent first","path":".scratch/absent-first.md"},{"label":"Review","path":".scratch/review-*.md"},{"label":"Absent middle","path":".scratch/absent-middle.md"},{"label":"Brief","path":".scratch/brief.md"}]'
+    artifact_configure "$partial"
+    artifact_config_saved "$partial"
+    artifact_wait t81 4
+    check_lua "${artifact_root}assert(not a.matches[1].path and a.matches[2].path and not a.matches[3].path and a.matches[4].path)"
+    artifact_buttons 2,4
+    artifact_open 2 .scratch/review-001.md '# Fictional review 001'
+    artifact_open 4 .scratch/brief.md '# Fictional cart brief'
+    artifact_event artifact=1
+    wait_text 'No current local artifact is available for this selection.'
+    artifact_no_documents
+    artifact_buttons 2,4
+    echo 'artifacts partial: only existing Review/Brief controls render, retaining original actions 2/4; missing action 1 refuses to open'
+    ;;
   artifact-missing-remote)
     artifact_initialize
     ctl key j >/dev/null
     artifact_wait t82 3
     check_lua "${artifact_root}assert(not a.error); for _, match in a.matches do assert(not match.path) end"
-    artifact_buttons 3 'No matching local file'
+    artifact_buttons ''
     artifact_event artifact=1
     wait_text 'No current local artifact is available for this selection.'
     artifact_no_documents
@@ -462,6 +546,7 @@ case "$ACTION_CASE" in
     ctl key End >/dev/null
     artifact_wait build-box/t83 0
     check_lua "${artifact_root}assert(a.error == 'Artifacts open for local hc terminals only.')"
+    artifact_buttons ''
     [ "$(artifact_find_count)" -eq 1 ]
     artifact_event artifact=1
     wait_text 'No current local artifact is available for this selection.'
@@ -505,7 +590,7 @@ case "$ACTION_CASE" in
     artifact_wait t81 0
     artifact_wait_second 0
     check_lua "${artifact_root}assert(#a.specs == 0 and not a.error)"
-    artifact_buttons 0
+    artifact_buttons ''
     artifact_event artifact=1
     wait_text 'No current local artifact is available for this selection.'
     artifact_no_documents
@@ -515,7 +600,7 @@ case "$ACTION_CASE" in
     wait_lua "${artifact_root}assert(#a.specs == 0 and a.at and a.at > artifact_before_reload_at)"
     artifact_wait t81 0
     artifact_wait_second 0
-    artifact_buttons 0
+    artifact_buttons ''
     [ "$(artifact_find_count)" -eq "$before_disable" ]
     artifact_no_documents
     echo 'artifacts: native global preferences refresh both live consoles without changing focus; custom config survives reload, invalid paths/{} preserve KV, and [] persists with zero discovery or opens'
@@ -560,6 +645,7 @@ case "$ACTION_CASE" in
     artifact_wait_marker "$T/state/find.completed"
     artifact_wait t82 3
     check_lua "${artifact_root}assert(not a.error); for _, match in a.matches do assert(not match.path) end"
+    artifact_buttons ''
     [ "$(artifact_find_count)" -eq 2 ]
     artifact_event artifact=1
     wait_text 'No current local artifact is available for this selection.'
@@ -615,12 +701,82 @@ case "$ACTION_CASE" in
     viewer_counts 1 2
     echo 'viewer reuse: Enter/double-click focus one read-only pane; two writable Attach requests stay distinct; Watch never reuses writable Attach'
     ;;
+  viewer-reporter)
+    viewer_initialize
+    viewer_new Enter viewer_read
+    viewer_controls tiled float,park
+    viewer_reject_foreign tiled
+    # Change actual native layout outside the plugin's action mailbox: the
+    # owner's existing lifecycle/timer path must converge without a key.
+    check_lua "cx.layout:focus(viewer_source); local ok, why = cx.layout:float(viewer_read,viewer_source,'br',{focus=false}); assert(ok,why)"
+    viewer_controls floating dock,park
+    viewer_reject_foreign floating
+    check_lua "local ok, why = cx.layout:dock(viewer_read,viewer_source,'right',{focus=false}); assert(ok,why)"
+    viewer_controls tiled float,park
+    check_lua "local ok, why = cx.layout:park(viewer_read); assert(ok,why)"
+    viewer_controls parked ''
+    viewer_reject_foreign parked
+    ctl plugins fixtures >/dev/null
+    wait_cursor t44 viewer_source
+    viewer_controls parked ''
+    viewer_reuse
+    viewer_controls tiled float,park
+    viewer_reject_foreign tiled
+    check_lua "cx.layout:focus(viewer_source); cx.layout:close(viewer_read)"
+    wait_lua "assert(cx.session:pane(viewer_read) == nil)"
+    viewer_controls none ''
+    viewer_new Enter viewer_read
+    viewer_controls tiled float,park
+    viewer_counts 2 0
+    echo 'viewer reporter: unrelated claims/state/notices cannot overwrite owner controls; native layout, reload, Watch unpark and close converge without extra attaches'
+    ;;
+  viewer-lease)
+    [ -n "${SHOOT_NO_CONSUMER:-}" ]
+    viewer_initialize
+    # Protocol-only case: no window consumer or fake layout result. A granted
+    # reporter can report none, reserve its read request and then disappear.
+    check_lua "${viewer_root}assert(root.p.herd_viewer_owner == ''); viewer_protocol = {owner='protocol-owner',generation=root.p.herd_generation,selection=root.p.herd_selection,address=root.p.herd_cursor,hc=root.p.herd_hc,state='none'}; cx.session:event(viewer_source,{ev='action',id='main',act='herd_viewer_claim=' .. tern.json.encode(viewer_protocol)})"
+    wait_lua "${viewer_root}assert(root.p.herd_viewer_owner == 'protocol-owner')"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_viewer_state=' .. tern.json.encode(viewer_protocol)})"
+    viewer_press Enter
+    wait_lua "${probe}assert(#q == 1 and q[1].mode == 'read' and q[1].viewer_owner == 'protocol-owner'); viewer_protocol_request = q[1].id"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_claim=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-other'})})"
+    pump
+    check_lua "${probe}assert(#q == 1 and q[1].owner == nil and root.p.herd_viewer_owner == 'protocol-owner')"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_claim=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-owner'})})"
+    wait_lua "${probe}assert(#q == 1 and q[1].owner == 'protocol-owner')"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_ack=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-owner'})})"
+    wait_lua "${probe}assert(#q == 0)"
+    # Real host polling expires the abandoned 3s lease; never replace its timer.
+    sleep 5.2
+    wait_lua "${viewer_root}assert(root.p.herd_viewer_owner == '' and root.p.herd_viewer.state == 'none')"
+    check_lua "${viewer_root}viewer_protocol.owner = 'protocol-successor'; viewer_protocol.generation = root.p.herd_generation; viewer_protocol.selection = root.p.herd_selection; cx.session:event(viewer_source,{ev='action',id='main',act='herd_viewer_claim=' .. tern.json.encode(viewer_protocol)})"
+    wait_lua "${viewer_root}assert(root.p.herd_viewer_owner == 'protocol-successor')"
+    # A second request deliberately delays its ACK across reporter expiry.
+    # Reporter failover must never revoke a granted execution or grant it twice.
+    viewer_press Enter
+    wait_lua "${probe}assert(#q == 1 and q[1].viewer_owner == 'protocol-successor'); viewer_protocol_request = q[1].id"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_claim=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-successor'})})"
+    wait_lua "${probe}assert(#q == 1 and q[1].owner == 'protocol-successor'); assert(q[1].expires - tern.now() > 3500, 'insufficient native request lifetime for no-replay observation')"
+    sleep 3.2
+    check_lua "${viewer_root}viewer_protocol.owner = 'protocol-after-expiry'; cx.session:event(viewer_source,{ev='action',id='main',act='herd_viewer_claim=' .. tern.json.encode(viewer_protocol)})"
+    wait_lua "${probe}assert(root.p.herd_viewer_owner == 'protocol-after-expiry'); assert(#q == 1 and q[1].id == viewer_protocol_request and q[1].expires > tern.now(), 'claimed request expired before no-replay observation'); assert(q[1].owner == 'protocol-successor' and q[1].viewer_owner == 'protocol-successor', 'reporter expiry revoked a granted execution')"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_claim=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-after-expiry'})}); cx.session:event(viewer_source,{ev='action',id='main',act='herd_ack=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-after-expiry'})})"
+    pump
+    check_lua "${probe}assert(#q == 1 and q[1].id == viewer_protocol_request and q[1].owner == 'protocol-successor', 'successor regranted or acknowledged the previous owner execution')"
+    check_lua "cx.session:event(viewer_source,{ev='action',id='main',act='herd_ack=' .. tern.json.encode({id=viewer_protocol_request,owner='protocol-successor'})})"
+    wait_lua "${probe}assert(#q == 0)"
+    [ ! -s "$T/state/actions.log" ]
+    echo 'viewer lease: foreign claimant refused, host timer expires abandoned reporter, successor accepted; delayed original ACK survives reporter expiry without execution regrant or terminal actions'
+    ;;
   viewer-reload)
     viewer_initialize
     viewer_new Enter viewer_read
     viewer_counts 1 0
+    viewer_controls tiled float,park
     ctl plugins fixtures >/dev/null
     wait_cursor t44 viewer_source
+    viewer_controls tiled float,park
     viewer_reuse
     viewer_counts 1 0
     kv=${KVFILE:?shoot.sh must provide its validated private kv path}
@@ -634,8 +790,10 @@ case "$ACTION_CASE" in
     viewer_counts 1 0
     check_lua "viewer_closed = viewer_read; cx.layout:focus(viewer_source); cx.layout:close(viewer_closed)"
     wait_lua "assert(cx.session:pane(viewer_closed) == nil)"
+    viewer_controls none ''
     viewer_new Enter viewer_read
     wait_lua "assert(viewer_read ~= viewer_closed)"
+    viewer_controls tiled float,park
     viewer_counts 2 0
     viewer_reuse
     viewer_counts 2 0
@@ -666,41 +824,75 @@ case "$ACTION_CASE" in
     ;;
   viewer-missing)
     viewer_initialize
+    viewer_controls none ''
+    wait_card_words t44 'Model —'
+    wait_card_words t44 'age unknown'
     viewer_new a viewer_write
     viewer_counts 0 1
+    viewer_controls none ''
     viewer_press d
-    wait_text 'No Watch viewer for spam-192'
+    wait_viewer_notice 'No Watch viewer for spam-192 (t44). Open Watch first.'
     wait_lua "${viewer_root}assert(#root.p.herd_requests == 0); local pane = cx.session:pane(viewer_write); assert(pane and not pane.floating and not pane.parked and pane.exited == nil)"
     viewer_counts 0 1
     check_lua "viewer_missing_count = #cx.session:panes()"
+    viewer_press m
+    wait_text 'Toasts muted.'
     viewer_press z
+    wait_viewer_notice 'No Watch viewer for spam-192 (t44). Open Watch first.'
     wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and #cx.session:panes() == viewer_missing_count); local pane = cx.session:pane(viewer_write); assert(pane and not pane.floating and not pane.parked and pane.exited == nil)"
     viewer_counts 0 1
     viewer_new Enter viewer_read
     wait_lua "assert(viewer_read ~= viewer_write)"
+    viewer_controls tiled float,park
     viewer_counts 1 1
     echo 'viewer missing: Dock/Park report no Watch instead of repurposing writable Attach; a subsequent Watch opens separately'
     ;;
   viewer-layout)
     viewer_initialize
+    viewer_controls none ''
     # Float may create the read-only viewer, but all later layout actions must
     # reuse that actual pane and keep its fake attach process alive.
     viewer_new p viewer_read
     wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and pane.floating and not pane.parked)"
     viewer_counts 1 0
+    viewer_controls floating dock,park
+    viewer_press p
+    wait_viewer_notice 'Watch viewer is already floating.'
+    viewer_controls floating dock,park
     viewer_press d
     wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and not pane.floating and not pane.parked and pane.tab)"
+    viewer_controls tiled float,park
+    viewer_press d
+    wait_viewer_notice 'Watch viewer is already docked.'
+    viewer_controls tiled float,park
     viewer_press z
     wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and pane.parked and pane.tab == nil and pane.exited == nil)"
+    viewer_controls parked ''
+    viewer_press d
+    wait_viewer_notice 'Watch viewer is parked. Use Watch to unpark it.'
+    viewer_controls parked ''
+    viewer_press m
+    wait_text 'Toasts muted.'
+    viewer_press p
+    wait_viewer_notice 'Watch viewer is parked. Use Watch to unpark it.'
+    viewer_controls parked ''
+    viewer_press z
+    wait_viewer_notice 'Watch viewer is already parked.'
+    viewer_controls parked ''
     viewer_reuse
+    viewer_controls tiled float,park
     viewer_counts 1 0
     viewer_event float
     wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and cx.session:pane(viewer_read).floating)"
+    viewer_controls floating dock,park
     viewer_event dock
     wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and not pane.floating and not pane.parked)"
+    viewer_controls tiled float,park
     viewer_event park
     wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and cx.session:pane(viewer_read).parked)"
+    viewer_controls parked ''
     viewer_reuse
+    viewer_controls tiled float,park
     viewer_counts 1 0
     echo 'viewer layout: native p/d/z and production Float/Dock/Park controls change real pane flags; Watch unparks the same running pane with one attach'
     ;;
@@ -764,8 +956,11 @@ case "$ACTION_CASE" in
     ;;
   activity-events)
     activity_baseline
+    wait_card_words t71 'Model —'
+    wait_card_words t71 'for .+ \(from hc\)'
     activity_phase 02
     wait_activity 3 3
+    wait_card_words t71 'for .+ \(seen by Herd\)'
     check_lua "${activity_root}local found = {}; for _, e in root.p.herd_activity do found[e.address] = e; assert(e.address ~= 't70' and e.address ~= 't74') end; assert(found.t71.status == 'blocked' and found.t73.status == 'done'); assert(found.t72.status == 'finished' and found.t72.exit_code == 7); assert(root.p.herd_cursor == 't71' and not root.p.herd_inbox)"
     rows=$(ctl tree | jq -r '.. | objects | select((.class? // "" | split(" ")) | index("sf-tbl-row")) | .. | objects | .text? // empty')
     [[ "$rows" = *b1-cart* && "$rows" != *b2-checkout* && "$rows" != *b0-summary* && "$rows" != *b4-images* ]]
@@ -1162,7 +1357,21 @@ case "$ACTION_CASE" in
     "$T/bin/hc" ls --label run=cart --json | jq -e '[.terminals[].address] == ["t61"]' >/dev/null
     "$T/bin/hc" ls --json --label=run=checkout | jq -e '[.terminals[].address] == ["t62"]' >/dev/null
     "$T/bin/hc" ls --label run=missing --json | jq -e '.terminals == []' >/dev/null
-    "$T/bin/hc" --json | jq -e '[.terminals[].labels.run // empty] == ["cart","checkout"]' >/dev/null
+    "$T/bin/hc" --json | jq -e '
+      keys == ["commands","hidden_finished","machines","terminals"]
+      and .commands == ["hc run <cmd>","hc ls","hc read <t>","hc attach <t>","hc --skill"]
+      and [.terminals[].labels.run // empty] == ["cart","checkout"]
+      and all(.terminals[];
+        keys == ["address","argv","cols","created_ms","cwd","die_with_parent",
+          "exit_code","finished_ms","foreground","identity","keep","labels","name",
+          "notify","parent","pid","reason","reported","rm","rows","screen","signal",
+          "state","status","status_ms","template","title","turn"]
+        and (.argv | type) == "array" and (.labels | type) == "object"
+        and (.foreground | keys) == ["argv","cwd","name","pid"]
+        and (.reported | type) == "boolean" and (.screen | type) == "string"
+        and ((.status | type) == "object" or .status == null))
+      and any(.terminals[]; .status == null and .status_ms == null)
+    ' >/dev/null
     "$T/bin/hc" get t61 --json | jq -e '.labels.run == "cart"' >/dev/null
     "$T/bin/hc" get t62 --json | jq -e '.labels.run == "checkout"' >/dev/null
     echo 'scope fixtures: distinct lists, unknown run empty, main and scoped get resolution'

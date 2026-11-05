@@ -13,11 +13,15 @@ local STATUS_MS = 3000
 
 -- PaneInfo has no session field for parked panes. Remember ownership while
 -- visible, never guess across sessions; keep only 32 recently used consoles.
-type Console = { session: number, used: number }
+type Console = {
+	session: number, used: number, feedback: string?, feedback_at: number?,
+	claim_since: number?, claim_at: number?,
+}
 local consoles: { [number]: Console } = {}
 local console_count = 0
 local use_serial = 0
 local last_focused: number? = nil
+local nonce = tostring({}) .. ":" .. tostring(tern.now())
 
 local function is_herd(pane: PaneInfo): boolean
 	return pane.block == KIND or pane.block == "plugin." .. KIND
@@ -194,6 +198,22 @@ local function preview(text: string): string
 	return if #one > 80 then string.sub(one, 1, 79) .. "…" else one
 end
 
+local function herd_props(cx: WindowCx, source: number): { [string]: any }?
+	local pane = cx.session:pane(source)
+	if pane == nil or not is_herd(pane) then return nil end
+	local surface = cx.session:surface(source, { root = "main", depth = 0, nodes = 1 })
+	local root = if type(surface) == "table" then surface.main else nil
+	return if root then root.p else nil
+end
+
+local function viewer_notice(cx: WindowCx, source: number, request: common.WindowRequest, text: string)
+	cx.session:event(source, { ev = "action", id = "main", act = "herd_viewer_notice=" .. tern.json.encode({
+		generation = request.generation, selection = request.selection,
+		address = request.address, hc = request.hc, text = text,
+		owner = request.viewer_owner,
+	}) })
+end
+
 -- Writable Attach always creates a split. Only registered read-only viewers
 -- participate in Watch reuse and its float/dock/park controls.
 local function create_viewer(cx: WindowCx, beside: number, address: string, mode: viewers.Mode, binary: string): number?
@@ -214,6 +234,15 @@ end
 
 local function use_viewer(cx: WindowCx, source: number, request: common.WindowRequest)
 	local verb, address, label = request.verb, request.address, request.label
+	local props = herd_props(cx, source)
+	if props == nil or props.herd_generation ~= request.generation
+		or props.herd_selection ~= request.selection or props.herd_cursor ~= address
+		or props.herd_hc ~= request.hc
+		or (request.mode == "read" and (props.herd_viewer_owner ~= request.viewer_owner
+			or request.viewer_owner ~= cx:window_key() .. ":" .. nonce)) then
+		viewer_notice(cx, source, request, "The selected terminal or run scope changed.")
+		return
+	end
 	local mode: viewers.Mode = if verb == "attach" then "write" else "read"
 	if request.mode ~= mode then
 		cx:toast("error", "Viewer mode does not match its action", label)
@@ -226,11 +255,13 @@ local function use_viewer(cx: WindowCx, source: number, request: common.WindowRe
 	local pane, why = viewers.find(cx, source, request.hc, address, "read")
 	if why then
 		cx:toast("error", "Could not find a Watch viewer", why)
+		viewer_notice(cx, source, request, "Could not find a Watch viewer: " .. why)
 		return
 	end
 	if pane == nil then
 		if verb ~= "watch" and verb ~= "float" then
 			cx:toast("info", "No Watch viewer for " .. label, "Open Watch first.")
+			viewer_notice(cx, source, request, "No Watch viewer for " .. label .. ". Open Watch first.")
 			return
 		end
 		pane = create_viewer(cx, source, address, "read", request.hc)
@@ -244,7 +275,7 @@ local function use_viewer(cx: WindowCx, source: number, request: common.WindowRe
 	end
 	if verb == "park" then
 		if info.parked then
-			cx:toast("info", "Watch viewer is already parked", label)
+			viewer_notice(cx, source, request, "Watch viewer is already parked.")
 			return
 		end
 		local ok, err = cx.layout:park(viewer)
@@ -252,6 +283,10 @@ local function use_viewer(cx: WindowCx, source: number, request: common.WindowRe
 		return
 	end
 	if info.parked then
+		if verb ~= "watch" then
+			viewer_notice(cx, source, request, "Watch viewer is parked. Use Watch to unpark it.")
+			return
+		end
 		-- Unpark deals beside the focused block: anchor it to the source
 		-- console's tab and host, not whichever pane this replica last used.
 		cx.layout:focus(source)
@@ -260,16 +295,25 @@ local function use_viewer(cx: WindowCx, source: number, request: common.WindowRe
 			cx:toast("error", "Could not unpark Watch viewer", err)
 			return
 		end
-		info = cx.session:pane(viewer)
-		if info == nil then
+		if cx.session:pane(viewer) == nil then
 			cx:toast("error", "Watch viewer is no longer available", label)
 			return
 		end
+		cx.layout:focus(viewer)
+		return
 	end
-	if verb == "float" and not info.floating then
+	if verb == "float" then
+		if info.floating then
+			viewer_notice(cx, source, request, "Watch viewer is already floating.")
+			return
+		end
 		local ok, err = cx.layout:float(viewer, source, "br", { focus = true })
 		if not ok then cx:toast("error", "Could not float Watch viewer", err) end
-	elseif verb == "dock" and info.floating then
+	elseif verb == "dock" then
+		if not info.floating then
+			viewer_notice(cx, source, request, "Watch viewer is already docked.")
+			return
+		end
 		local ok, err = cx.layout:dock(viewer, source, "right", { focus = true })
 		if not ok then cx:toast("error", "Could not dock Watch viewer", err) end
 	else
@@ -336,13 +380,6 @@ local function open_worktree(cx: WindowCx, path: string, label: string)
 	end
 end
 
-local function herd_props(cx: WindowCx, source: number): { [string]: any }?
-	local pane = cx.session:pane(source)
-	if pane == nil or not is_herd(pane) then return nil end
-	local surface = cx.session:surface(source, { root = "main", depth = 0, nodes = 1 })
-	local root = if type(surface) == "table" then surface.main else nil
-	return if root then root.p else nil
-end
 
 -- A local-looking hc address is insufficient: the console itself can belong
 -- to a remote Tern host. Require exact source membership and a current choice.
@@ -477,16 +514,59 @@ end
 
 -- A fresh VM identity prevents a reload from executing its old grant again.
 -- Window keys alone are not unique across machines; include this VM's nonce.
-local nonce = tostring({}) .. ":" .. tostring(tern.now())
 local completed: { [string]: boolean } = {}
 local waiting: { [string]: number } = {}
 local request_timer: TimerHandle? = nil
 local REQUEST_MS = 100
 local BACKGROUND_MS = 500
+local polling = false
+local wake_pending = false
+
+-- One small, deduplicated snapshot per remembered console (at most 32).
+-- Inspect native layout on the existing mailbox clock: no hc work, title
+-- matching, descendants, extra timer or host-render side effects.
+local function report_viewer(cx: WindowCx, source: number, props: { [string]: any }, owner: string)
+	local known = consoles[source]
+	if known == nil or type(props.herd_cursor) ~= "string" or props.herd_cursor == ""
+		or type(props.herd_hc) ~= "string" or type(props.herd_generation) ~= "number"
+		or type(props.herd_selection) ~= "number" then return end
+	local now = tern.now()
+	if props.herd_viewer_owner ~= owner then
+		known.feedback = nil
+		if props.herd_viewer_owner == "" then
+			local since = known.claim_since or now
+			known.claim_since = since
+			if (cx.session:focused() == source or now - since >= 200)
+				and (known.claim_at == nil or now - (known.claim_at :: number) >= 500) then
+				known.claim_at = now
+				cx.session:event(source, { ev = "action", id = "main", act = "herd_viewer_claim=" .. tern.json.encode({
+					generation = props.herd_generation, selection = props.herd_selection,
+					address = props.herd_cursor, hc = props.herd_hc, owner = owner,
+				}) })
+			end
+		else
+			known.claim_since, known.claim_at = nil, nil
+		end
+		return
+	end
+	known.claim_since, known.claim_at = nil, nil
+	local state, pane = viewers.state(cx, source, props.herd_hc, props.herd_cursor)
+	local snapshot = tern.json.encode({
+		generation = props.herd_generation, selection = props.herd_selection,
+		address = props.herd_cursor, hc = props.herd_hc, state = state, pane = pane,
+		owner = owner,
+	})
+	-- Unchanged metadata renews only once a second, not on the 10 Hz clock.
+	if known.feedback == snapshot and known.feedback_at and now - (known.feedback_at :: number) < 1000 then return end
+	known.feedback, known.feedback_at = snapshot, now
+	cx.session:event(source, { ev = "action", id = "main", act = "herd_viewer_state=" .. snapshot })
+end
 
 local function poll_requests(cx: WindowCx?)
+	if polling then wake_pending = true; return end
 	request_timer = nil
 	if cx == nil then return end
+	polling = true
 	local wcx: WindowCx = cx
 	local panes, current, tabs = inspect_consoles(wcx)
 	local found = false
@@ -502,6 +582,7 @@ local function poll_requests(cx: WindowCx?)
 			local surface = wcx.session:surface(pane.pane, { root = "main", depth = 0, nodes = 1 })
 			local root = if type(surface) == "table" then surface.main else nil
 			local requests = if root and root.p then root.p.herd_requests else nil
+			if root and root.p then report_viewer(wcx, pane.pane, root.p, owner) end
 			if type(requests) == "table" then
 				for _, request in requests do
 					present[request.id] = true
@@ -510,7 +591,8 @@ local function poll_requests(cx: WindowCx?)
 						completed[request.id] = true
 						wcx.session:event(pane.pane, { ev = "action", id = "main", act = "herd_ack=" .. claim })
 						dispatch(wcx, pane.pane, request)
-					elseif request.owner == nil then
+					elseif request.owner == nil and (request.mode ~= "read"
+						or (root and root.p and (root.p.herd_viewer_owner == "" or root.p.herd_viewer_owner == owner))) then
 						local since = waiting[request.id]
 						if since == nil then
 							since = tern.now()
@@ -528,10 +610,14 @@ local function poll_requests(cx: WindowCx?)
 	end
 	for id in completed do if not present[id] then completed[id] = nil end end
 	for id in waiting do if not present[id] then waiting[id] = nil end end
-	if found then request_timer = tern.timer(if herd_focused or next(waiting) ~= nil then REQUEST_MS else BACKGROUND_MS, poll_requests) end
+	polling = false
+	local wake = wake_pending
+	wake_pending = false
+	if found then request_timer = tern.timer(if wake then 0 elseif herd_focused or next(waiting) ~= nil then REQUEST_MS else BACKGROUND_MS, poll_requests) end
 end
 
 local function wake_requests(_ev: any, cx: WindowCx)
+	if polling then wake_pending = true; return end
 	local _, why = viewers.prune(cx)
 	if why then cx:toast("error", "Could not update Watch viewers", why) end
 	if request_timer then request_timer:cancel(); request_timer = nil end

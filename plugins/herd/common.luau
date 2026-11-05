@@ -47,6 +47,9 @@ function M.scope(value: any): string?
 	return if #clean > 0 and #clean <= 128 and not string.find(clean, "%c") then clean else nil
 end
 
+-- Current native layout of the exact registered read-only Watch pane.
+export type ViewerState = "none" | "tiled" | "floating" | "parked"
+
 -- Carried as inert root-node metadata, never as a URL/open effect. The
 -- serial host worker grants each request to one window before it acts.
 export type WindowRequest = {
@@ -58,6 +61,7 @@ export type WindowRequest = {
 	mode: ("read" | "write")?,
 	expires: number,
 	owner: string?,
+	viewer_owner: string?,
 	generation: number?,
 	scopes: { string }?,
 	selection: number?,

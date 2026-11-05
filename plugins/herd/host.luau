@@ -189,6 +189,9 @@ type State = {
 	detail_timer: TimerHandle?,
 	detail_busy: boolean,
 	artifact: ArtifactState,
+	viewer: { state: common.ViewerState, pane: number? },
+	viewer_owner: string?,
+	viewer_until: number,
 	artifact_timer: TimerHandle?,
 	artifact_busy: boolean,
 	artifact_pending: boolean,
@@ -295,6 +298,7 @@ local function invalidate_artifacts(state: State, configured: { artifacts.Spec }
 		specs = specs, signature = signature or artifacts.signature(specs),
 		matches = {}, loading = false, waiting = false,
 	}
+	state.viewer = { state = "none" }
 	for i = #state.requests, 1, -1 do
 		local verb = state.requests[i].verb
 		if verb == "artifact_check" or verb == "artifact_open" then table.remove(state.requests, i) end
@@ -1037,6 +1041,19 @@ local function switch_scope(state: State, value: string)
 	refresh(state)
 end
 
+-- A reporter is a window VM, not a window key shared by remote replicas.
+-- Reuse the ordinary pane clock to expire a vanished/reloaded VM; no extra
+-- timer or hc request. Claimed actions remain bound until ACK/expiry: a lost
+-- reporter lease is never evidence that its granted action did not execute.
+local function expire_viewer(state: State)
+	if state.viewer_owner == nil or tern.now() < state.viewer_until then return end
+	state.viewer_owner, state.viewer_until = nil, 0
+	state.viewer = { state = "none" }
+	for _, request in state.requests do
+		if request.mode == "read" and request.owner == nil then request.viewer_owner = nil end
+	end
+end
+
 -- One pending timer per live run.
 local function poll(state: State)
 	if not alive(state) or state.timer then
@@ -1047,6 +1064,7 @@ local function poll(state: State)
 			return
 		end
 		state.timer = nil
+		expire_viewer(state)
 		refresh(state)
 		state.cx:render()
 		poll(state)
@@ -1690,11 +1708,11 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 		if s ~= "finished" then
 			if info and info.status == s and info.status_since then
 				local age = dur(os.time() - (info.status_since :: number))
-				table.insert(status, ui.span(" · for " .. age .. ", per hc", "muted"))
+				table.insert(status, ui.span(" · for " .. age .. " (from hc)", "muted"))
 			else
 				local since = since_of(state, term)
 				table.insert(status, ui.span(
-					if since then " · for " .. dur(os.time() - (since :: number)) .. ", seen here" else " · since unknown",
+					if since then " · for " .. dur(os.time() - (since :: number)) .. " (seen by Herd)" else " · age unknown",
 					"muted"
 				))
 			end
@@ -1735,7 +1753,7 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 		agent = spans
 	end
 	table.insert(items, fact("Agent", agent))
-	table.insert(items, fact("Model", later(if info then info.model else nil, "not in its command line")))
+	table.insert(items, fact("Model", ui.span(if info and info.model then info.model else "—", if info and info.model then "mono" else "muted")))
 	table.insert(items, fact("Turn", ui.span(if term.turn then tostring(term.turn) else "–", "mono")))
 	table.insert(items, fact("Started", later(if info and info.created then ago(info.created :: number) else nil, "unknown")))
 	if term.state ~= "live" or (info and info.state ~= "live") then
@@ -1812,15 +1830,22 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 	for index, spec in artifact_entry.specs do
 		local match = artifact_entry.matches[index]
 		local path = if match then match.path else nil
-		table.insert(artifact_buttons, button(spec.label, "artifact=" .. index, {
-			size = "sm", icon = "file-text", title = path or spec.path,
-			disabled = if artifact_entry.loading then "Checking local artifacts"
-				elseif artifact_entry.error then artifact_entry.error
-				elseif path == nil then "No matching local file" else nil,
-		}))
+		if path and not artifact_entry.loading and not artifact_entry.error then
+			table.insert(artifact_buttons, button(spec.label, "artifact=" .. index, {
+				size = "sm", icon = "file-text", title = path,
+			}))
+		end
 	end
-	table.insert(body, ui.node("col", { key = "actions", gap = "md" }, {
-		ui.node("col", { key = "safe", gap = "sm" }, {
+	local viewer_buttons: { Node } = {}
+	if state.viewer.state == "tiled" then
+		table.insert(viewer_buttons, button("Float Watch", "float", { size = "sm", keys = { "p" }, title = "Float the read-only viewer" }))
+	elseif state.viewer.state == "floating" then
+		table.insert(viewer_buttons, button("Dock Watch", "dock", { size = "sm", keys = { "d" }, title = "Dock the read-only viewer" }))
+	end
+	if state.viewer.state == "tiled" or state.viewer.state == "floating" then
+		table.insert(viewer_buttons, button("Park Watch", "park", { size = "sm", keys = { "z" }, title = "Hide the read-only viewer without stopping its terminal" }))
+	end
+	local safe_rows: { Node } = {
 			ui.node("row", { key = "use", gap = "sm", wrap = true }, {
 				button("Attach", "attach", { size = "sm", keys = { "a" } }),
 				button("Logs", "logs", { size = "sm", keys = { "l" } }),
@@ -1830,13 +1855,15 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 				button("Worktree", "worktree", { size = "sm", keys = { "w" }, disabled = why_not_tree }),
 				button("Focus", "focus", { size = "sm", keys = { "f" }, on = state.subtree == term.address }),
 			}),
-			ui.node("row", { key = "viewer", gap = "sm", wrap = true }, {
-				button("Float Watch", "float", { size = "sm", keys = { "p" }, title = "Float the read-only viewer; open one if needed" }),
-				button("Dock Watch", "dock", { size = "sm", keys = { "d" }, title = "Dock the existing read-only viewer" }),
-				button("Park Watch", "park", { size = "sm", keys = { "z" }, title = "Hide the read-only viewer without stopping its terminal" }),
-			}),
-			ui.node("row", { key = "artifacts", gap = "sm", wrap = true }, artifact_buttons),
-		}),
+	}
+	if #viewer_buttons > 0 then
+		table.insert(safe_rows, ui.node("row", { key = "viewer", gap = "sm", wrap = true }, viewer_buttons))
+	end
+	if #artifact_buttons > 0 then
+		table.insert(safe_rows, ui.node("row", { key = "artifacts", gap = "sm", wrap = true }, artifact_buttons))
+	end
+	table.insert(body, ui.node("col", { key = "actions", gap = "md" }, {
+		ui.node("col", { key = "safe", gap = "sm" }, safe_rows),
 		ui.node("row", { key = "danger", gap = "sm", justify = "end" }, {
 			button("Interrupt…", "interrupt", {
 				size = "sm",
@@ -2073,6 +2100,8 @@ local function enqueue_window(state: State, verb: string, address: string, label
 		mode = if verb == "attach" then "write"
 			elseif verb == "watch" or verb == "float" or verb == "dock" or verb == "park" then "read" else nil,
 		generation = state.scope_epoch,
+		selection = state.artifact.epoch,
+		viewer_owner = if verb == "watch" or verb == "float" or verb == "dock" or verb == "park" then state.viewer_owner else nil,
 		scopes = if verb == "scope" then recent_scopes() else nil,
 	}
 	table.insert(state.requests, request)
@@ -2277,12 +2306,18 @@ end
 -- confirmed. A confirmed action is checked again against the latest list:
 -- the terminal may have finished while the dialog was open.
 local function on_action(state: State, cx: BlockCx, act_name: string, value: string?)
+	expire_viewer(state)
 	if (act_name == "herd_claim" or act_name == "herd_ack") and value then
 		local ok, claim = pcall(tern.json.decode, value)
 		if ok and type(claim) == "table" and type(claim.owner) == "string" then
 			for i, request in state.requests do
 				if request.id == claim.id and tern.now() < request.expires then
 					if act_name == "herd_claim" and request.owner == nil then
+						if request.mode == "read" then
+							if state.viewer_owner ~= nil and state.viewer_owner ~= claim.owner then return end
+							state.viewer_owner, state.viewer_until = claim.owner, tern.now() + 3000
+							request.viewer_owner = claim.owner
+						end
 						request.owner = claim.owner
 					elseif act_name == "herd_ack" and request.owner == claim.owner then
 						table.remove(state.requests, i)
@@ -2290,6 +2325,32 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 					break
 				end
 			end
+		end
+		return
+	end
+	if (act_name == "herd_viewer_claim" or act_name == "herd_viewer_state" or act_name == "herd_viewer_notice") and value then
+		local ok, snapshot = pcall(tern.json.decode, value)
+		if not ok or type(snapshot) ~= "table"
+			or snapshot.generation ~= state.scope_epoch or snapshot.selection ~= state.artifact.epoch
+			or snapshot.address ~= state.cursor or snapshot.hc ~= (hc_path or "hc")
+			or type(snapshot.owner) ~= "string" or #snapshot.owner == 0 or #snapshot.owner > 4096 then return end
+		if act_name == "herd_viewer_claim" then
+			if state.viewer_owner == nil then
+				state.viewer_owner, state.viewer_until = snapshot.owner, tern.now() + 3000
+			end
+			return
+		end
+		if state.viewer_owner ~= snapshot.owner then return end
+		if act_name == "herd_viewer_notice" then
+			if type(snapshot.text) == "string" and #snapshot.text <= 4096 then
+				set_notice(state, snapshot.text, "muted")
+			end
+		elseif snapshot.state == "none" or snapshot.state == "tiled"
+			or snapshot.state == "floating" or snapshot.state == "parked" then
+			local pane = snapshot.pane
+			if snapshot.state ~= "none" and (type(pane) ~= "number" or pane < 0 or pane % 1 ~= 0) then return end
+			state.viewer_until = tern.now() + 3000
+			state.viewer = { state = snapshot.state, pane = if snapshot.state == "none" then nil else pane }
 		end
 		return
 	end
@@ -2443,6 +2504,9 @@ tern.block.define("herd", {
 				epoch = 0, specs = artifact_specs, signature = artifacts.signature(artifact_specs),
 				matches = {}, loading = false, waiting = false,
 			},
+			viewer = { state = "none" },
+			viewer_owner = nil,
+			viewer_until = 0,
 			artifact_timer = nil,
 			artifact_busy = false,
 			artifact_pending = false,
@@ -2552,6 +2616,8 @@ tern.block.define("herd", {
 				herd_scope = state.run or "", herd_scopes = state.scopes, herd_generation = state.scope_epoch,
 				herd_cursor = state.cursor or "", herd_inbox = state.inbox,
 				herd_selection = state.artifact.epoch, herd_artifacts = state.artifact,
+				herd_hc = hc_path or "hc", herd_viewer = state.viewer,
+				herd_viewer_owner = state.viewer_owner or "",
 				herd_activity = state.activity, herd_unread = state.unread,
 				herd_summary = { working = summary_counts.working or 0, blocked = summary_counts.blocked or 0,
 					errors = summary_counts.error or 0, unread = state.unread, run = state.run or "" } }, {

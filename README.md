@@ -79,7 +79,10 @@ Choose **Open herd console** from Tern's palette, press **Ctrl+Alt+Shift+H**, or
 tern ctl plugins run plugin.herd.open
 ```
 
-It focuses an existing Herd block in the current session or opens one beside the current pane. Agents remain owned by herdr-core: closing or parking a viewer does not stop them. Watch focuses its existing read-only viewer, unparking it if needed; Attach always opens a separate writable split.
+It focuses an existing Herd block in the current session or opens one beside the current pane. Agents remain owned by herdr-core: closing or parking a viewer does not stop them. Watch focuses its existing read-only viewer, unparking it if needed; Attach always opens a separate writable split. Viewer buttons match that read-only pane: tiled shows **Float Watch** / **Park Watch**, floating shows **Dock Watch** / **Park Watch**, and absent or parked shows neither. Keys still dispatch when a button is hidden; an inapplicable action gives a dock notice.
+Viewer feedback belongs to one window replica at a time, so an unrelated
+replica cannot erase those controls. If its reporter disappears, the bounded
+lease expires and another capable replica can take over.
 
 Choose **Next Herd terminal that needs you** / **Previous Herd terminal that needs you**
 in the palette, or press **Ctrl+Alt+Shift+J** / **Ctrl+Alt+Shift+U** from any tab.
@@ -89,7 +92,8 @@ no watch, attach or send happens automatically. With multiple consoles, the focu
 one wins, then the most recently focused/used, then the lowest pane id.
 
 The selected card's **Report**, **Review** and **Brief** buttons open existing
-local files beside the console. Choose **Configure Herd artifacts**
+local files beside the console; missing or remote files have no buttons.
+Choose **Configure Herd artifacts**
 (`plugin.herd.artifacts`) to edit global relative-path specs without opening a
 console; `[]` disables the links. Defaults are `.scratch/report.md`,
 `.scratch/review-*.md`
@@ -97,6 +101,10 @@ console; `[]` disables the links. Defaults are `.scratch/report.md`,
 `find` is supported; remote hc terminals and remote/unknown Tern source hosts
 are refused rather than interpreting their paths on this machine. See the
 [artifact guide](plugins/herd/README.md#local-artifacts) for configuration and limits.
+
+The card shows an unknown **Model** as `—`. Status ages say `for AGE (from hc)`
+when hc supplies the matching status timestamp, `for AGE (seen by Herd)` for a
+change observed between polls, or `age unknown` when neither source is available.
 
 | Key | Action |
 |---|---|
@@ -106,7 +114,7 @@ are refused rather than interpreting their paths on this machine. See the
 | u | Choose All terminals or a remembered/typed run label |
 | Enter / o, double-click | Focus/open the selected terminal's read-only Watch viewer |
 | a | Open a new writable Attach split, never reused for Watch |
-| p / d / z | Float (open if needed) / dock / park the read-only Watch viewer |
+| p / d / z | Float (open if absent) / dock / park the read-only Watch viewer; parked viewers require Watch to unpark, and inapplicable keys give a notice |
 | l | Read the last 40 lines into a logs card |
 | s | Send text after a prompt and confirmation; never forces past a prompt |
 | x | Confirm an interrupt, only for working or blocked terminals |
@@ -151,7 +159,7 @@ conservatively baselined rather than resurfacing old unread news.
 
 ## Configuration and privacy
 
-No config file is needed. Filter, subtree focus, selected terminal, finished visibility, mute and run scope survive reloads in Tern's local plugin storage. Press **u**, click **Run…**, or choose **Choose Herd run scope** in the palette to switch between **All terminals** and a run label. The picker makes one `hc --json` request to discover live labels (which `hc ls` omits), and remembers up to 12 labels, including labels seen in selected-terminal details. Typed labels remain available when discovery fails or a run is no longer live. A block's `run=<id>` argument supplies its initial scope; the saved choice wins on reload.
+No config file is needed. Filter, subtree focus, selected terminal, finished visibility, mute and run scope survive reloads in Tern's local plugin storage. Press **u**, click **Run…**, or choose **Choose Herd run scope** in the palette to switch between **All terminals** and a run label. The picker makes one `hc --json` request to discover live labels (which `hc ls` omits), and remembers up to 12 labels, including labels seen in selected-terminal details. Bare `hc --json` was verified on installed hc 0.1.18 to return an object with `commands`, `hidden_finished`, `machines` and full `terminals` records, including `labels`; no `labels.run` value was present in the inspected live or retained finished terminals. Run-label selection is exercised with fictional fixtures, not claimed as a live-run observation. Typed labels remain available when discovery fails or a run is no longer live. A block's `run=<id>` argument supplies its initial scope; the saved choice wins on reload.
 
 The plugin reads terminal names, working directories, machine names, command-line details and, on request, terminal output through your local `hc`. Those can contain private data. Send and Interrupt affect real terminals after confirmation. Do not publish screenshots of your live window or copy real terminal output into fixtures; all shipped examples use `/home/alex`, `shop` and `build-box`.
 Activity persists only bounded transition metadata and read state, never working

@@ -27,6 +27,8 @@
 -- operation rereads KV so other clients' latest records survive read/merge/
 -- write. KV has no compare-and-swap; simultaneous writers are best-effort.
 
+local common = require("./common")
+
 local M = {}
 
 export type Mode = "read" | "write"
@@ -203,21 +205,21 @@ local function target(cx: WindowCx, source: number, hc: string, address: string,
 	}, view, nil
 end
 
-function M.find(cx: WindowCx, source: number, hc: string, address: string, mode: Mode): (number?, string?)
+local function lookup(cx: WindowCx, source: number, hc: string, address: string, mode: Mode, touch: boolean): (PaneInfo?, string?)
 	local wanted, view, why = target(cx, source, hc, address, mode)
 	if not wanted or not view then return nil, why end
 	local entries, dirty, load_error = load()
 	if not entries then return nil, load_error end
 	dirty = prune_entries(entries, wanted.window_key, view) > 0 or dirty
-	local found: number? = nil
+	local found: PaneInfo? = nil
 	for index, entry in entries do
 		if same_key(entry, wanted) then
 			local pane = view.panes[entry.pane]
 			local session = if pane and pane.tab then view.tabs[pane.tab] else nil
 			if view.hosts[entry.pane] == wanted.host
 				and (session == wanted.session or (pane and pane.parked and session == nil)) then
-				found = entry.pane
-				if index ~= #entries then
+				found = pane
+				if touch and index ~= #entries then
 					table.remove(entries, index)
 					table.insert(entries, entry)
 					dirty = true
@@ -231,6 +233,19 @@ function M.find(cx: WindowCx, source: number, hc: string, address: string, mode:
 		if save_error then return nil, save_error end
 	end
 	return found, nil
+end
+
+function M.find(cx: WindowCx, source: number, hc: string, address: string, mode: Mode): (number?, string?)
+	local pane, why = lookup(cx, source, hc, address, mode, true)
+	return if pane then pane.pane else nil, why
+end
+
+-- Metadata-only inspection: exact registry identity plus current native pane
+-- flags, without refreshing recency or writing KV on every window tick.
+function M.state(cx: WindowCx, source: number, hc: string, address: string): (common.ViewerState, number?, string?)
+	local pane, why = lookup(cx, source, hc, address, "read", false)
+	if pane == nil then return "none", nil, why end
+	return if pane.parked then "parked" elseif pane.floating then "floating" else "tiled", pane.pane, nil
 end
 
 function M.record(cx: WindowCx, source: number, hc: string, address: string, mode: Mode, pane: number): (boolean, string?)
