@@ -7,6 +7,8 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
 ### Added
 
 - Run picker in the console and palette switches between All terminals and remembered run scopes without reopening the console.
@@ -56,6 +58,7 @@ First public release.
 - An isolated headless screenshot harness with a fake `hc` and fictional fixtures for normal,
   empty, error, deep-tree, transition, degraded and remote-machine states.
 
-[Unreleased]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/DarkoKuzmanovic/tern-herd/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/DarkoKuzmanovic/tern-herd/releases/tag/v0.2.1

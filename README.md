@@ -58,14 +58,14 @@ Install directly from GitHub:
 tern plugin install github.com/DarkoKuzmanovic/tern-herd/plugins/herd
 ```
 
-Verified on 2026-11-05 with Tern 0.9.12 in an isolated configuration: Herd 0.2.2 installed with no problems. To work from a checkout instead, clone this repository and enter its root, then:
+Verified on 2026-11-05 with Tern 0.9.12 in an isolated configuration: Herd 0.3.0 installed with no problems. To work from a checkout instead, clone this repository and enter its root, then:
 
 ```sh
 tern plugin link plugins/herd
 tern plugin list --json
 ```
 
-Expect Herd `0.2.2`, `status: "ready"` and `problems: []`. Linking uses the files in place; each save hot-reloads the live plugin. After updating the checkout:
+Expect Herd `0.3.0`, `status: "ready"` and `problems: []`. Linking uses the files in place; each save hot-reloads the live plugin. After updating the checkout:
 
 ```sh
 tern plugin reload herd

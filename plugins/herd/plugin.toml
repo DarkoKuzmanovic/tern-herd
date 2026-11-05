@@ -1,7 +1,7 @@
 schema = 1
 id = "herd"
 name = "Herd"
-version = "0.2.2"
+version = "0.3.0"
 description = "Watch herdr-core (hc) terminals and agents: status, turns, worktrees, filters, toasts, attach, read, send, interrupt."
 icon = "users"
 host = "host.luau"
