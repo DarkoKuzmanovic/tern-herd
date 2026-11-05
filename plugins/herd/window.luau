@@ -55,7 +55,8 @@ local function choose_scope(cx: WindowCx, block: number, request: common.WindowR
 		{ label = "All terminals", run = "", current = request.address == "" },
 		{ label = "Enter run label…", typed = true, detail = "Type a run label" },
 	}
-	for _, run in request.scopes or {} do
+	local scopes: { string } = request.scopes or {}
+	for _, run in scopes do
 		table.insert(items, { label = "Run " .. run, run = run, current = request.address == run })
 	end
 	cx:pick({ items = items, placeholder = "Choose Herd run scope", icon = "users" })

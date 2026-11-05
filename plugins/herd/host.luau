@@ -604,7 +604,8 @@ local function visible(state: State): { Term }
 			local a = table.remove(stack) :: string
 			if not inside[a] then
 				inside[a] = true
-				for _, c in state.kids[a] or {} do
+				local children: { string } = state.kids[a] or {}
+				for _, c in children do
 					table.insert(stack, c)
 				end
 			end
@@ -612,7 +613,8 @@ local function visible(state: State): { Term }
 		scope = inside
 	end
 	local out: { Term } = {}
-	for _, t in state.terms or {} do
+	local terms: { Term } = state.terms or {}
+	for _, t in terms do
 		if (scope == nil or (scope :: { [string]: boolean })[t.address]) and matches(state.filter, t) then
 			table.insert(out, t)
 		end
@@ -622,7 +624,8 @@ end
 
 local function counts(state: State): Counts
 	local c: Counts = {}
-	for _, t in state.terms or {} do
+	local terms: { Term } = state.terms or {}
+	for _, t in terms do
 		local s = status_of(t)
 		c[s] = (c[s] or 0) + 1
 	end
@@ -1362,7 +1365,7 @@ end
 -- how many worktrees they use, how much work the turn counters add up to,
 -- and the finished terminals out of view. One pass over the list.
 local function stats_view(state: State, c: Counts): Node
-	local terms = state.terms or {}
+	local terms: { Term } = state.terms or {}
 	local per_cwd: { [string]: number } = {}
 	local worktrees, shared, turns, counted = 0, 0, 0, 0
 	local busiest: Term? = nil
@@ -1662,21 +1665,26 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 	end
 	local children = #(state.kids[term.address] or {})
 
+	local function fact(label: string, value: Spans): { Spans }
+		local row: { Spans } = { label, value }
+		return row
+	end
+
 	local items: { { Spans } } = {
-		{ "Status", status },
+		fact("Status", status),
 	}
 	if info and info.status_msg then
-		table.insert(items, { "Says", info.status_msg :: string })
+		table.insert(items, fact("Says", info.status_msg :: string))
 	end
 	local agent: Spans = term.agent
 	if info and info.foreground and info.foreground ~= term.agent then
 		local spans: { Span | string } = { ui.span(term.agent), ui.span(" · running " .. (info.foreground :: string), "muted") }
 		agent = spans
 	end
-	table.insert(items, { "Agent", agent })
-	table.insert(items, { "Model", later(if info then info.model else nil, "not in its command line") })
-	table.insert(items, { "Turn", ui.span(if term.turn then tostring(term.turn) else "–", "mono") })
-	table.insert(items, { "Started", later(if info and info.created then ago(info.created :: number) else nil, "unknown") })
+	table.insert(items, fact("Agent", agent))
+	table.insert(items, fact("Model", later(if info then info.model else nil, "not in its command line")))
+	table.insert(items, fact("Turn", ui.span(if term.turn then tostring(term.turn) else "–", "mono")))
+	table.insert(items, fact("Started", later(if info and info.created then ago(info.created :: number) else nil, "unknown")))
 	if term.state ~= "live" or (info and info.state ~= "live") then
 		local code = if info and info.exit_code ~= nil then info.exit_code else term.exit_code
 		local spans: { Span | string } = {}
@@ -1694,10 +1702,10 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 		if info and info.finished then
 			table.insert(spans, ui.span(" · " .. ago(info.finished :: number), "muted"))
 		end
-		table.insert(items, { "Exit", spans })
+		table.insert(items, fact("Exit", spans))
 	end
-	table.insert(items, { "Parent", parent })
-	table.insert(items, { "Children", if children > 0 then ui.span(tostring(children), "mono") else ui.span("none", "muted") })
+	table.insert(items, fact("Parent", parent))
+	table.insert(items, fact("Children", if children > 0 then ui.span(tostring(children), "mono") else ui.span("none", "muted")))
 	local cwd = tilde(term.cwd)
 	-- One line when the whole path fits the value column; otherwise break
 	-- before the distinctive leaf so it isn't split at the card's edge. A
@@ -1705,12 +1713,12 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 	local value_ch = math.max(1, (if wide then CARD_CH else cols - PAGE_PAD) - CARD_INSET_CH - KV_KEY_CH - KV_GAP_CH)
 	local directory, leaf_name = string.match(cwd, "^(.*)/([^/]+)$")
 	local cwd_lines = if directory and leaf_name and width(cwd) > value_ch then directory .. "/\n" .. leaf_name else cwd
-	table.insert(items, { "Worktree", if cwd_lines ~= "" then ui.span(cwd_lines, "mono") else ui.span("unknown", "muted") })
+	table.insert(items, fact("Worktree", if cwd_lines ~= "" then ui.span(cwd_lines, "mono") else ui.span("unknown", "muted")))
 	if term.where ~= "" then
-		table.insert(items, { "Where", term.where })
+		table.insert(items, fact("Where", term.where))
 	end
 	if info and info.run then
-		table.insert(items, { "Run", ui.span(info.run :: string, "mono") })
+		table.insert(items, fact("Run", ui.span(info.run :: string, "mono")))
 	end
 
 	local body: { Node } = {}
@@ -1838,13 +1846,13 @@ end
 -- The dock's key legend: only what has no button on screen (moving the
 -- selection, Enter on a row, the filter keys); every other action shows its
 -- keycap on its own button. Shorter when narrow.
-local LEGEND = {
+local LEGEND: { { string } } = {
 	{ "↑↓", "select" },
 	{ "home/end", "jump" },
 	{ "enter", "watch" },
 	{ "1–4 tab", "filter" },
 }
-local LEGEND_SHORT = {
+local LEGEND_SHORT: { { string } } = {
 	{ "↑↓", "select" },
 	{ "enter", "watch" },
 	{ "tab", "filter" },
@@ -1852,7 +1860,8 @@ local LEGEND_SHORT = {
 
 local function legend(compact: boolean): Node
 	local spans: { Span | string } = {}
-	for _, entry in (if compact then LEGEND_SHORT else LEGEND) do
+	local entries: { { string } } = if compact then LEGEND_SHORT else LEGEND
+	for _, entry in entries do
 		table.insert(spans, ui.span(entry[1], "key"))
 		table.insert(spans, ui.span(" " .. entry[2] .. "  ", "muted"))
 	end
