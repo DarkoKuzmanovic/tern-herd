@@ -9,24 +9,125 @@ local KIND = common.KIND
 local ACTION = common.OPEN_ACTION
 local STATUS_MS = 3000
 
--- The Herd block shown in this window, if any.
-local function find_herd(cx: WindowCx): PaneInfo?
-	for _, pane in cx.session:panes() do
-		if pane.block == KIND or pane.block == "plugin." .. KIND then
-			return pane
-		end
-	end
-	return nil
+-- PaneInfo has no session field for parked panes. Remember ownership while
+-- visible, never guess across sessions; keep only 32 recently used consoles.
+type Console = { session: number, used: number }
+local consoles: { [number]: Console } = {}
+local console_count = 0
+local use_serial = 0
+local last_focused: number? = nil
+
+local function is_herd(pane: PaneInfo): boolean
+	return pane.block == KIND or pane.block == "plugin." .. KIND
 end
 
-local function open_herd(cx: WindowCx): number?
+local function remember_console(pane: number, session: number): Console
+	local entry = consoles[pane]
+	if entry then entry.session = session; return entry end
+	if console_count == 32 then
+		local oldest: number? = nil
+		local age = math.huge
+		for id, known in consoles do
+			if known.used < age or (known.used == age and (oldest == nil or id > oldest)) then
+				oldest, age = id, known.used
+			end
+		end
+		if oldest then consoles[oldest] = nil; console_count -= 1 end
+	end
+	local created: Console = { session = session, used = 0 }
+	consoles[pane] = created
+	console_count += 1
+	return created
+end
+
+local function inspect_consoles(cx: WindowCx): ({ PaneInfo }, number?, { [number]: number })
+	local tabs: { [number]: number } = {}
+	local sessions: { [number]: boolean } = {}
+	local current: number? = nil
+	local only: number? = nil
+	local session_count = 0
+	for _, session in cx.session:sessions() do
+		sessions[session.id] = true
+		session_count += 1
+		only = session.id
+		if session.current then current = session.id end
+		for _, tab in session.tabs do tabs[tab] = session.id end
+	end
+	local panes = cx.session:panes()
+	local present: { [number]: boolean } = {}
+	for _, pane in panes do
+		if is_herd(pane) then present[pane.pane] = true end
+	end
+	for id, entry in consoles do
+		if not present[id] or not sessions[entry.session] then
+			consoles[id] = nil
+			console_count -= 1
+		end
+	end
+	local focused = cx.session:focused()
+	for _, pane in panes do
+		if is_herd(pane) then
+			local session = if pane.tab then tabs[pane.tab] else nil
+			if session == nil and pane.parked and session_count == 1 then session = only end
+			if session then
+				local entry = remember_console(pane.pane, session)
+				if pane.pane == focused and focused ~= last_focused then
+					use_serial += 1
+					entry.used = use_serial
+				end
+			end
+		end
+	end
+	last_focused = focused
+	return panes, current, tabs
+end
+
+-- Current session only: focused console, then most recently focused/used,
+-- then lowest pane id. Its host state, including saved run scope, stays intact.
+local function find_herd(cx: WindowCx): PaneInfo?
+	local panes, current, tabs = inspect_consoles(cx)
+	if current == nil then return nil end
+	local focused = cx.session:focused()
+	local best: PaneInfo? = nil
+	local latest = -1
+	for _, pane in panes do
+		if is_herd(pane) then
+			local known = consoles[pane.pane]
+			local session = if pane.tab then tabs[pane.tab] elseif known then known.session else nil
+			if session == current then
+				if pane.pane == focused then return pane end
+				local used = if known then known.used else 0
+				if best == nil or used > latest or (used == latest and pane.pane < best.pane) then
+					best, latest = pane, used
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function open_herd(cx: WindowCx, initial_action: string?): number?
 	local pane = find_herd(cx)
 	if pane then
-		if pane.parked then cx.layout:unpark(pane.pane) end
+		if pane.parked then
+			local ok, why = cx.layout:unpark(pane.pane)
+			if not ok then
+				cx:toast("error", "Could not unpark the Herd console", why)
+				return nil
+			end
+		end
 		cx.layout:focus(pane.pane)
+		local known = consoles[pane.pane]
+		if known then use_serial += 1; known.used = use_serial end
+		if initial_action then
+			cx.session:event(pane.pane, { ev = "action", id = "main", act = initial_action })
+		end
 		return pane.pane
 	end
-	local created = cx:new_block(KIND, nil, "beside")
+	-- Events sent immediately after new_block can precede host initialization.
+	-- Launch args carry this one-shot action reliably, without a readiness poll.
+	local args = if initial_action then { "initial_action=" .. initial_action } else nil
+	local created = cx:new_block(KIND, args, "beside")
 	if created == nil then
 		cx:toast("error", "Herd is not loaded on this host", "Install the plugin where your panes run.")
 	end
@@ -45,10 +146,22 @@ tern.bind(if tern.runtime.os == "macos" then "cmd+alt+shift+h" else "ctrl+alt+sh
 tern.command({
 	id = "scope", title = "Choose Herd run scope", icon = "users",
 	run = function(cx: WindowCx)
-		local pane = open_herd(cx)
-		if pane then cx.session:event(pane, { ev = "action", id = "main", act = "scope" }) end
+		open_herd(cx, "scope")
 	end,
 })
+
+
+tern.command({
+	id = "next_needs", title = "Next Herd terminal that needs you", icon = "users",
+	run = function(cx: WindowCx) open_herd(cx, "herd_next=1") end,
+})
+tern.command({
+	id = "previous_needs", title = "Previous Herd terminal that needs you", icon = "users",
+	run = function(cx: WindowCx) open_herd(cx, "herd_next=-1") end,
+})
+local needs_prefix = if tern.runtime.os == "macos" then "cmd+alt+shift+" else "ctrl+alt+shift+"
+tern.bind(needs_prefix .. "j", "plugin.herd.next_needs")
+tern.bind(needs_prefix .. "u", "plugin.herd.previous_needs")
 
 local function choose_scope(cx: WindowCx, block: number, request: common.WindowRequest)
 	local items: { PickItem } = {
@@ -180,19 +293,14 @@ local function poll_requests(cx: WindowCx?)
 	request_timer = nil
 	if cx == nil then return end
 	local wcx: WindowCx = cx
-	local tabs: { [number]: boolean } = {}
-	for _, session in wcx.session:sessions() do
-		if session.current then
-			for _, tab in session.tabs do tabs[tab] = true end
-		end
-	end
+	local panes, current, tabs = inspect_consoles(wcx)
 	local found = false
 	local focused = wcx.session:focused()
 	local herd_focused = false
 	local present: { [string]: boolean } = {}
 	local owner = wcx:window_key() .. ":" .. nonce
-	for _, pane in wcx.session:panes() do
-		if (pane.block == KIND or pane.block == "plugin." .. KIND) and pane.tab and tabs[pane.tab] then
+	for _, pane in panes do
+		if current ~= nil and is_herd(pane) and pane.tab and tabs[pane.tab] == current then
 			found = true
 			if pane.pane == focused then herd_focused = true end
 			-- Root props only: no descendants, rendered text or full-table read.
@@ -239,6 +347,9 @@ end
 tern.on("pane_created", wake_requests)
 tern.on("focus", wake_requests)
 tern.on("tab_created", wake_requests)
+tern.on("pane_closed", wake_requests)
+tern.on("tab_closed", wake_requests)
+tern.on("session_ended", wake_requests)
 request_timer = tern.timer(0, poll_requests)
 
 -- Status segment: counts the host half publishes in kv while a Herd block

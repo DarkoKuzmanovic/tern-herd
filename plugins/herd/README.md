@@ -103,8 +103,9 @@ Views):
   newest line and scrolls up. `l` again reads again; nothing polls it.
 - **Dock**: a one-line notice (sent, interrupted, refused, left the list),
   the refresh problem while a stale list shows, and a legend of only the keys
-  that have no button on screen: ↑↓ select, Home/End jump, Enter watch and
-  1–4/Tab filter (every other action shows its keycap on its button).
+  that have no button on screen: ↑↓ select, Home/End jump, Enter watch,
+  1–4/Tab filter and `[`/`]` previous/next needs-you (every other action shows
+  its keycap on its button).
 
 ### Width
 
@@ -169,8 +170,10 @@ tern plugin list                                 # herd … ready
 reload herd`.
 
 Open it with the palette command **Open herd console** (`plugin.herd.open`),
-or **Ctrl+Alt+Shift+H** (⌘⌥⇧H on macOS). The command focuses (or unparks) the
-Herd block already in the window, or opens one beside the focused pane.
+or **Ctrl+Alt+Shift+H** (⌘⌥⇧H on macOS). The command focuses (or unparks) a
+Herd block in the current session, or opens one beside the focused pane.
+The focused console wins; otherwise it reuses the most recently focused/used,
+then the lowest pane id. The reused console keeps its saved run scope.
 
 While a Herd block is open, the status line shows `herd N working`
 (`· M blocked`, `· K error`): error tone with errors, else warning with
@@ -182,6 +185,7 @@ block.
 | Key | Does |
 | --- | --- |
 | ↑ ↓ / k j, Home End / g G, PgUp PgDn | move the selection |
+| ] / [ | select next / previous blocked or errored terminal in the current run scope |
 | 1 2 3 4, Tab ⇧Tab | filter: All, Needs you, Working, Done |
 | u | choose All terminals or a remembered/typed run label without reopening |
 | Enter / o (or double-click a row) | watch: `hc attach --observe --history 200 <t>` in a split to the right. Nothing you type reaches the agent and the terminal isn't resized |
@@ -203,11 +207,46 @@ keeps running.
 The filter, focus, finished and mute settings and the selected terminal are
 saved, so a reload or restart keeps them.
 
+### Next / previous needs-you
+
+From any tab, choose **Next Herd terminal that needs you**
+(`plugin.herd.next_needs`) or **Previous Herd terminal that needs you**
+(`plugin.herd.previous_needs`) in the palette. Their global shortcuts are
+**Ctrl+Alt+Shift+J** / **Ctrl+Alt+Shift+U** (⌘⌥⇧J / ⌘⌥⇧U on macOS,
+untested). Inside the console, press `]` / `[`.
+
+Navigation focuses, unparks or opens the current session's console and only
+selects a terminal. It never opens a watch/attach split, sends text or interrupts.
+It walks blocked/error rows in the full scoped parent–child tree order,
+relative to the selected address, wrapping in either direction. A sole target
+can select itself. Once a target is found it clears subtree focus and switches
+to **Needs you**, so the target cannot remain hidden by the previous view.
+No eligible target leaves the view unchanged and displays a notice.
+
+Only the console's existing list is used: no discovery request or extra `hc ls`
+poll is made. The normal selected-card detail debounce remains unchanged.
+While the initial list is missing, one pending direction (the latest requested)
+waits for the next successful normal list refresh; a scope switch cancels it.
+The opening command's initial intent is consumed once; restoring the block does
+not replay it.
+A failed or overdue list may still be navigated, but the notice calls those
+results cached and possibly out of date. A console opened after all observers
+closed must wait for its first list, not invent a fresh queue.
+
+Parked consoles are reused only when their session ownership is known from
+this window's observations, or there is only one session. After a window-half
+reload with multiple sessions, an unidentifiable parked console is left alone
+rather than taking a console from another session. Focus/ownership bookkeeping
+is bounded to 32 consoles and pruned when panes or sessions disappear.
+
+
 ### Run scopes
 
 Press **u**, click **Run…**, or choose **Choose Herd run scope**
-(`plugin.herd.scope`) from any tab. Choose **All terminals**, one of the
-12 recent run labels, or **Enter run label…**. Opening the picker makes one
+(`plugin.herd.scope`) from any tab. If there is no console, the command opens
+one before presenting the picker; restoring that console later does not reopen
+the picker. Choose **All terminals**, one of the 12 recent run labels, or
+**Enter run label…**. Opening the picker makes one
 `hc --json` request: unlike the reduced `hc ls --json` projection, the bare
 JSON command retains `Terminal.labels`, so live run labels can be discovered
 without per-row `get` polling. At most 12 distinct labels join the recent list.

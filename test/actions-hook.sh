@@ -68,9 +68,43 @@ type_scope() {
 }
 no_terminal_actions() {
   if grep -qE '^(send|interrupt|attach) ' "$T/state/actions.log" 2>/dev/null; then
-    echo 'stale scope request reached fake hc' >&2
+    echo 'unexpected terminal action reached fake hc' >&2
     return 1
   fi
+}
+wait_cursor() {
+  local address_json cursor_probe=$probe
+  address_json=$(jq -Rn --arg address "$1" '$address')
+  if [ -n "${2:-}" ]; then
+    cursor_probe="local p = $2; local root = cx.session:surface(p,{root='main',depth=0,nodes=1}).main; "
+  fi
+  for _ in {1..40}; do
+    pump
+    if check_lua "${cursor_probe}assert(root.p.herd_cursor == $address_json)" >/dev/null 2>&1; then return 0; fi
+  done
+  echo "navigation did not select '$1'" >&2
+  ctl tree >&2
+  return 1
+}
+assert_herd_focused() {
+  ctl state | jq -e '.focused.label | startswith("Herd")' >/dev/null
+}
+list_calls() { grep -c '^ls ' "$T/state/invocations.log" || true; }
+hold_private_lists() {
+  # Hold only this run's already-pinned wrapper; never change resolution or
+  # production code. Release after asserting the loading UI, not after a sleep.
+  cp "$T/bin/hc" "$T/bin/hc-ready"
+  {
+    printf '#!/bin/sh\n'
+    printf 'if [ "${1:-}" = ls ]; then\n'
+    printf '  n=0\n'
+    printf '  while [ ! -e "%s" ]; do\n' "$T/state/ls.release"
+    printf '    if [ "$n" -ge 160 ]; then echo "private list barrier was not released within 8 seconds" >&2; exit 124; fi\n'
+    printf '    n=$((n + 1)); sleep 0.05\n'
+    printf '  done\n'
+    printf 'fi\n'
+    printf 'exec "%s" "$@"\n' "$T/bin/hc-ready"
+  } >"$T/bin/hc"
 }
 
 case "$ACTION_CASE" in
@@ -166,6 +200,173 @@ case "$ACTION_CASE" in
     fi
     [ ! -s "$T/state/actions.log" ]
     ;;
+  needs-cycle)
+    wait_scope "" 1 1 1
+    wait_cursor t61
+    # The console keys must take the production BlockDef.key path.
+    ctl key ']' >/dev/null
+    wait_cursor t62
+    ctl key ']' >/dev/null
+    wait_cursor t63
+    ctl key ']' >/dev/null
+    wait_cursor t62
+    ctl key '[' >/dev/null
+    wait_cursor t63
+    ctl plugins run plugin.herd.previous_needs >/dev/null
+    wait_cursor t62
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    wait_cursor t63
+    no_terminal_actions
+    echo 'needs cycle: console brackets and both palette actions cycle blocked/error in both directions with wrap'
+    ;;
+  needs-filter)
+    wait_cursor t61
+    ctl key 3 >/dev/null
+    ctl key f >/dev/null
+    wait_text 'focus b1-cart'
+    # Both eligible targets are hidden by Working and by the cart subtree.
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    wait_cursor t62
+    wait_text 'Blocked or failed, waiting for you'
+    tree=$(ctl tree)
+    # Run-wide stats deliberately retain cart as the busiest terminal even
+    # when filtered out. Assert table rows, not every name anywhere in the UI.
+    rows=$(printf '%s\n' "$tree" | jq -r '.. | objects | select((.class? // "" | split(" ")) | index("sf-tbl-row")) | .. | objects | .text? // empty')
+    [[ "$rows" = *b2-checkout* && "$rows" = *b3-review* && "$rows" != *b1-cart* ]] || {
+      echo 'Needs you table did not replace the filtered cart subtree' >&2
+      printf '%s\n' "$rows" >&2
+      exit 1
+    }
+    [[ "$tree" != *'focus b1-cart'* ]]
+    # The next target remains available after leaving the old subtree.
+    ctl key ']' >/dev/null
+    wait_cursor t63
+    no_terminal_actions
+    echo 'needs filter: hidden target selected, Needs you rows visible and cart subtree cleared'
+    ;;
+  needs-scopes)
+    scope_event checkout
+    wait_scope checkout 0 1 0
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    wait_cursor t62
+    ctl plugins run plugin.herd.previous_needs >/dev/null
+    wait_cursor t62
+    scope_rows checkout
+    scope_event cart
+    wait_scope cart 1 0 0
+    ctl key 3 >/dev/null
+    ctl key f >/dev/null
+    wait_text 'focus b1-cart'
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    wait_text 'No blocked or errored terminals in this scope'
+    wait_cursor t61
+    wait_text 'focus b1-cart'
+    wait_text 'In a turn now'
+    scope_rows cart
+    ctl plugins run plugin.herd.previous_needs >/dev/null
+    wait_text 'No blocked or errored terminals in this scope'
+    wait_cursor t61
+    scope_rows cart
+    no_terminal_actions
+    echo 'needs scopes: checkout sole target selects itself, cart has explicit no-target notice without leaking All rows'
+    ;;
+  needs-bindings)
+    # Inspect effective resolution, not just source text or declared bindings.
+    # Canonical chord spelling varies by platform, so compare normalized words.
+    check_lua "local keys = cx.actions:keys(); for _, spec in {{'plugin.herd.next_needs','j'}, {'plugin.herd.previous_needs','u'}} do local action = cx.actions:describe(spec[1]); assert(action.id == spec[1] and action.available and #action.keys > 0); local found = false; for chord, ids in keys do local c = string.lower(chord); local modifier = string.find(c,'ctrl',1,true) or string.find(c,'cmd',1,true) or string.find(c,'control',1,true) or string.find(c,'command',1,true); if modifier and string.find(c,'alt',1,true) and string.find(c,'shift',1,true) and string.sub(c,-1) == spec[2] and ids[1] == spec[1] then assert(table.find(action.keys,chord), 'describe/keys disagree'); found = true end end; assert(found, 'effective global chord missing for ' .. spec[1]) end"
+    # This Tern's headless modified-key input also misses built-in shortcuts.
+    # Dispatch the effective chord's highest-priority action, not a hardcoded
+    # substitute; plain console bracket input is covered by needs-cycle.
+    check_lua "local ids = cx.actions:keys()['ctrl+alt+shift+j']; assert(ids and ids[1] == 'plugin.herd.next_needs'); cx.actions:run(ids[1])"
+    wait_cursor t62
+    check_lua "local ids = cx.actions:keys()['ctrl+alt+shift+u']; assert(ids and ids[1] == 'plugin.herd.previous_needs'); cx.actions:run(ids[1])"
+    wait_cursor t63
+    no_terminal_actions
+    echo 'needs bindings: effective keys/describe agree and both highest-priority shortcut actions navigate; synthetic modifier input unverified'
+    ;;
+  needs-focus)
+    # Two consoles make choosing the first enumerated pane insufficient.
+    check_lua "${probe}needs_primary = p; needs_second = cx:new_block('herd.herd', nil, 'beside'); assert(needs_second)"
+    for _ in {1..40}; do
+      pump
+      if check_lua "local r = cx.session:surface(needs_second,{root='main',depth=0,nodes=1}).main; assert(r.p.herd_cursor == 't61')" >/dev/null 2>&1; then break; fi
+    done
+    check_lua "cx.session:event(needs_second,{ev='action',id='main',act='herd_scope=' .. tern.json.encode('cart')}); cx.layout:focus(needs_primary)"
+    pump
+    check_lua "cx.layout:new_tab({command='exec /bin/cat'}); needs_other = cx.session:focused(); assert(needs_other and cx.session:tab_of(needs_other) ~= cx.session:tab_of(needs_primary))"
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    assert_herd_focused
+    wait_cursor t62 needs_primary
+    check_lua "local a = cx.session:surface(needs_primary,{root='main',depth=0,nodes=1}).main.p; local b = cx.session:surface(needs_second,{root='main',depth=0,nodes=1}).main.p; assert(a.herd_cursor == 't62' and a.herd_scope == ''); assert(b.herd_cursor == 't61' and b.herd_scope == 'cart'); local count = 0; for _, pane in cx.session:panes() do if pane.block == 'herd.herd' or pane.block == 'plugin.herd.herd' then count += 1 end end; assert(count == 2)"
+    no_terminal_actions
+    echo 'needs focus: command from a separate private shell tab reuses the most recently focused console, not another scope'
+    ;;
+  needs-parked)
+    check_lua "${probe}needs_parked = p; cx.layout:new_tab({command='exec /bin/cat'}); local ok, why = cx.layout:park(needs_parked); assert(ok, why); assert(cx.session:pane(needs_parked).parked)"
+    ctl plugins run plugin.herd.previous_needs >/dev/null
+    assert_herd_focused
+    wait_cursor t63
+    check_lua "${probe}assert(p == needs_parked and not cx.session:pane(p).parked)"
+    no_terminal_actions
+    echo 'needs parked: previous command unparks and focuses the original console without attaching'
+    ;;
+  needs-open|needs-loading-scope)
+    hold_private_lists
+    # Remove the console but keep a harmless private shell as the origin.
+    check_lua "${probe}cx.layout:new_tab({command='exec /bin/cat'}); cx.layout:close(p)"
+    ctl plugins run plugin.herd.next_needs >/dev/null
+    assert_herd_focused
+    wait_text 'Waiting for the first list; will select the next terminal that needs you.'
+    if [ "$ACTION_CASE" = needs-open ]; then
+      touch "$T/state/ls.release"
+      wait_cursor t62
+      # A deferred request is consumed once: later normal polls must not cycle.
+      sleep 2.2
+      wait_cursor t62
+      check_lua "${probe}local count = 0; for _, pane in cx.session:panes() do if pane.block == 'herd.herd' or pane.block == 'plugin.herd.herd' then count += 1 end end; assert(count == 1)"
+      # Keep a different saved cursor so replaying launch's "next" is visible.
+      ctl plugins run plugin.herd.previous_needs >/dev/null
+      wait_cursor t63
+      ctl plugins fixtures >/dev/null
+      wait_scope "" 1 1 1
+      wait_cursor t63
+      echo 'needs open: launch navigation applies once after the normal first list, not on later polls or reload'
+    else
+      scope_event cart
+      check_lua "${probe}assert(root.p.herd_scope == 'cart')"
+      touch "$T/state/ls.release"
+      wait_scope cart 1 0 0
+      wait_cursor t61
+      scope_rows cart
+      tree=$(ctl tree)
+      [[ "$tree" != *'No blocked or errored terminals in this scope'* && "$tree" != *'Waiting for the first list'* ]]
+      echo 'needs loading scope: changing scope clears deferred navigation before the new list applies'
+    fi
+    no_terminal_actions
+    ;;
+  needs-no-poll)
+    # Start immediately after observing a normal list poll. The burst must
+    # finish before the next 2-second host timer, avoiding an idle-poll race.
+    before=$(list_calls)
+    for _ in {1..120}; do
+      pump
+      [ "$(list_calls)" -gt "$before" ] && break
+    done
+    [ "$(list_calls)" -gt "$before" ]
+    before=$(list_calls)
+    start=$(date +%s%N)
+    check_lua "${probe}for _ = 1, 24 do cx.session:event(p,{ev='action',id='main',act='herd_next=1'}); cx.session:event(p,{ev='action',id='main',act='herd_next=-1'}) end"
+    sleep 0.15
+    elapsed=$((($(date +%s%N) - start) / 1000000))
+    [ "$elapsed" -lt 1500 ] || { echo "navigation polling observation took ${elapsed}ms; cannot exclude the normal timer" >&2; exit 1; }
+    [ "$(list_calls)" -eq "$before" ] || { echo 'navigation started an hc ls instead of using the current list' >&2; exit 1; }
+    if grep -q '^--json$' "$T/state/invocations.log"; then
+      echo 'navigation started full-list discovery' >&2
+      exit 1
+    fi
+    no_terminal_actions
+    echo 'needs polling: 48 production host navigation events add no list/discovery calls between normal polls'
+    ;;
   scope-fixtures)
     # Exercise both --label spellings and canonical main-fixture get lookup.
     "$T/bin/hc" ls --json | jq -e '.terminals | length == 3' >/dev/null
@@ -176,6 +377,31 @@ case "$ACTION_CASE" in
     "$T/bin/hc" get t61 --json | jq -e '.labels.run == "cart"' >/dev/null
     "$T/bin/hc" get t62 --json | jq -e '.labels.run == "checkout"' >/dev/null
     echo 'scope fixtures: distinct lists, unknown run empty, main and scoped get resolution'
+    ;;
+  scope-open)
+    # Launch intent must survive block creation; an immediate session:event
+    # can arrive before the new block has initialized and disappear.
+    check_lua "${probe}cx.layout:new_tab({command='exec /bin/cat'}); cx.layout:close(p)"
+    ctl plugins run plugin.herd.scope >/dev/null
+    type_scope cart
+    wait_scope cart 1 0 0
+    wait_cursor t61
+    scope_rows cart
+    discovery_before=$(grep -c '^--json$' "$T/state/invocations.log" || true)
+    ctl plugins fixtures >/dev/null
+    wait_scope cart 1 0 0
+    wait_cursor t61
+    for _ in {1..8}; do pump; done
+    check_lua "${probe}assert(#q == 0, 'launch scope picker replayed on reload')"
+    tree=$(ctl tree)
+    [[ "$tree" != *'Choose Herd run scope'* ]] || {
+      echo 'launch scope picker reopened after plugin reload' >&2
+      exit 1
+    }
+    [ "$(grep -c '^--json$' "$T/state/invocations.log" || true)" -eq "$discovery_before" ]
+    scope_rows cart
+    no_terminal_actions
+    echo 'scope open: absent console opens its picker once, selects cart and does not replay the picker/discovery on reload'
     ;;
   scope-discovery)
     wait_scope "" 1 1 1

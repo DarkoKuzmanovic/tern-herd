@@ -12,10 +12,13 @@ for action in watch-unfocused doubleclick-unfocused; do run_case "$action"; done
 for action in arbitration abandoned reload expire; do
   SHOOT_NO_CONSUMER=1 run_case "$action"
 done
-for action in scope-fixtures scope-discovery scope-ui scope-reload scope-confirm-send scope-confirm-interrupt scope-confirm-finished scope-detail scope-summary; do
+for action in scope-fixtures scope-discovery scope-ui scope-open scope-reload scope-confirm-send scope-confirm-interrupt scope-confirm-finished scope-detail scope-summary; do
   run_case "$action" scopes
 done
 SHOOT_NO_CONSUMER=1 run_case scope-pending scopes
+for action in needs-cycle needs-filter needs-scopes needs-bindings needs-focus needs-parked needs-open needs-loading-scope needs-no-poll; do
+  run_case "$action" scopes
+done
 # Both native shell recording and PATH interception must fail closed.
 if SHOOT_HOOK='"$TERNFD" ctl --control "$SOCK" open-url external-test://not-handled' \
   "$TEST/shoot.sh" activation; then
@@ -26,4 +29,4 @@ if SHOOT_HOOK='"$T/bin/xdg-open" https://example.invalid' "$TEST/shoot.sh" activ
   echo 'actions: FAIL: executable opener escaped the guard' >&2
   exit 1
 fi
-echo 'actions: all action, scope, arbitration, expiry, reload and opener-guard checks passed'
+echo 'actions: all action, scope, needs-you navigation, arbitration, expiry, reload and opener-guard checks passed'

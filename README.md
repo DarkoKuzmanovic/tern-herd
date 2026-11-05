@@ -12,6 +12,7 @@ Watch and steer [herdr-core](https://herdr.dev) terminals and coding agents from
 - A parent–child tree of terminals, with agent, status, turn counter and worktree.
 - **All**, **Needs you**, **Working** and **Done** filters, subtree focus and finished terminals.
 - A run picker with remembered labels: switch scopes without reopening the console.
+- Next/previous needs-you navigation from any tab, with console focus and no automatic attach.
 - A selected-terminal card with model, status age, parent, worktree and exit details; logs on demand.
 - Read-only watch splits, full attach splits, and confirmed send/interrupt actions.
 - Transition toasts, a mute switch and a status-line count of working, blocked and errored agents.
@@ -40,7 +41,7 @@ These show made-up data from the isolated test harness, never a real work sessio
 
 - **Tern 0.9.11 or later (tested on 0.9.11 and 0.9.12)**. Tern is closed beta and requires a Stencil account.
 - **herdr-core `hc` 0.1.18 or later**, available from [herdr.dev](https://herdr.dev). The Herdr desktop app is not required.
-- Linux is tested. **macOS is untested**; its shortcut is ⌘⌥⇧H.
+- Linux is tested. **macOS is untested**; use ⌘⌥⇧H to open and ⌘⌥⇧J / ⌘⌥⇧U for next / previous needs-you.
 - For development and screenshots: Bash, Git, `jq`, standard GNU command-line tools and a working Tern graphics environment. `shellcheck` is optional.
 
 ## Install
@@ -72,11 +73,19 @@ Choose **Open herd console** from Tern's palette, press **Ctrl+Alt+Shift+H**, or
 tern ctl plugins run plugin.herd.open
 ```
 
-It focuses an existing Herd block or opens one beside the current pane. Agents remain owned by herdr-core: closing a viewer does not stop them. Watch is read-only; Attach lets you type and resize the terminal.
+It focuses an existing Herd block in the current session or opens one beside the current pane. Agents remain owned by herdr-core: closing a viewer does not stop them. Watch is read-only; Attach lets you type and resize the terminal.
+
+Choose **Next Herd terminal that needs you** / **Previous Herd terminal that needs you**
+in the palette, or press **Ctrl+Alt+Shift+J** / **Ctrl+Alt+Shift+U** from any tab.
+These focus (or unpark/open) the current session's console and cycle blocked/errored
+terminals in its saved run scope, wrapping in full tree order. They only select:
+no watch, attach or send happens automatically. With multiple consoles, the focused
+one wins, then the most recently focused/used, then the lowest pane id.
 
 | Key | Action |
 |---|---|
 | ↑ / ↓, k / j; Home / End, g / G; PgUp / PgDn | Select a terminal |
+| ] / [ | Select next / previous blocked or errored terminal in this scope |
 | 1–4, Tab / Shift+Tab | All / Needs you / Working / Done |
 | u | Choose All terminals or a remembered/typed run label |
 | Enter / o, double-click | Watch in a read-only split |
@@ -101,6 +110,12 @@ Exactly one of them claims it and opens the split, git block or dialog; no link 
 The host rechecks confirmed send/interrupt actions against its latest terminal list.
 Status counts cross to the window through scope-specific surface metadata; no separate server is added.
 Finished terminals can disappear between polls; [the guide explains which finishes can toast](plugins/herd/README.md#toasts).
+Needs-you navigation uses that console's existing list, never a discovery request
+or extra list poll. Selecting a target clears subtree focus and shows **Needs you**;
+no target leaves the current view unchanged and says so. A newly opened console
+defers one navigation until its normal first list arrives; changing scope cancels
+that pending navigation. Opening intent is consumed once, not replayed on reload.
+Cached results are explicitly marked when stale.
 
 ## Configuration and privacy
 

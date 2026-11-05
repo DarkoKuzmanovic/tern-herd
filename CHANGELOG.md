@@ -10,7 +10,10 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 ### Added
 
 - Run picker in the console and palette, with remembered labels, saved scope,
-  scope-aware status counts and confirmations that cannot cross scope changes.
+  scope-aware status counts and confirmations that cannot cross scope changes;
+  the palette opens a missing console before presenting its picker.
+- Next/previous needs-you commands and global shortcuts focus the console and
+  cycle blocked/errored terminals in its saved scope, without automatically attaching.
 - Public static Luau type-check CI with pinned, checksum-verified analyzer and
   Tern declarations; local `test/typecheck.sh` checks both plugin halves.
 

@@ -19,7 +19,7 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
 ./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
-./test/actions.sh                                      # actions, run scopes, arbitration, expiry and opener guard
+./test/actions.sh                                      # actions, run scopes, needs-you navigation, arbitration and opener guard
 ```
 
 | option | meaning |
@@ -307,6 +307,53 @@ host action (as another replica could) while the send confirmation is open:
 changing list visibility must still permit exactly one send to the original
 address. These cases use only the isolated control socket, fake hc and the
 same opener guard as the other action checks.
+
+Needs-you navigation cases also use `scopes`, through the production host and
+window halves. They assert the root surface's selected address (`herd_cursor`),
+not merely a notice or highlight:
+
+- Console `]` / `[` and both palette actions (`plugin.herd.next_needs` /
+  `plugin.herd.previous_needs`) cycle the blocked checkout and errored review
+  builders forward/backward, including wrap.
+- Working plus a cart-only subtree initially hides both targets. Navigation
+  selects checkout, switches to Needs you and clears the subtree, making both
+  eligible rows visible. A no-target cart scope instead preserves its Working
+  filter/subtree and shows an explicit notice; checkout's sole eligible target
+  can select itself in either direction. Neither scope leaks All terminals.
+- `cx.actions:keys()` and `describe()` must agree that each global shortcut
+  effectively resolves first to its Herd action. The test dispatches that
+  highest-priority resolved action and verifies the selected address. Actual
+  modified-key input is **not verified**: isolated Linux headless probes left
+  both Herd J/U/H and the built-in New tab shortcut inert, even from a native
+  file block, with key-window focus enabled, alternate modifier spellings,
+  quoted combinations and separate keydown/up. This is a harness capability
+  limitation, not evidence that a physical shortcut works or fails. Console
+  brackets and palette actions remain behavioral tests; physical Linux and
+  macOS shortcut dispatch require separate manual verification.
+- A command from a separate tab running only `/bin/cat` focuses the most
+  recently focused existing console, even with another console on a different
+  run scope. A parked console is unparked/reused rather than duplicated.
+- With no console, the command opens/focuses one. A release-file barrier in
+  only that run's pinned fake-`hc` wrapper holds list replies until the test
+  observes the initial loading notice, then releases the normal first list.
+  One deferred navigation selects checkout exactly once across a later
+  background poll; selecting review and reloading must preserve review rather
+  than replay the launch navigation. The scope-change case switches to cart
+  while the barrier is held, then releases both old/new list replies and asserts
+  the deferred navigation was cleared. The private barrier fails after eight
+  seconds, before the production host's ten-second list timeout.
+- With no console, `plugin.herd.scope` opens a console and its real run picker.
+  Choosing cart changes the rows; reloading preserves cart without reopening
+  that launch picker or issuing another run-discovery request.
+- A burst of 48 production `herd_next=1/-1` events immediately after a normal
+  host poll adds no `hc ls` or full-list discovery call. The observation must
+  finish before the next normal two-second timer; a slow observation fails
+  explicitly rather than mistaking that timer for navigation-triggered polling.
+
+Every navigation case rejects fake `send`, `interrupt` or `attach` calls and
+retains the native/PATH external-opener guard. Selected-row detail `get`s and
+normal background list polling are allowed; navigation never opens a viewer or
+sends terminal input.
 
 `tern serve` is a standalone headless window, not a daemon session to which a
 second real client can attach. The competing-consumer test instead loads a

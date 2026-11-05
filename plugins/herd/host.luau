@@ -10,7 +10,8 @@
 -- a attaches to type into it, l reads its last 40 lines once, s sends a
 -- prompt, x interrupts, w opens its worktree in a git block, f focuses the
 -- selected terminal's subtree, h shows finished terminals (`hc ls --all`),
--- m mutes the toasts, r refreshes now, Esc closes the logs, then the focus.
+-- m mutes the toasts, r refreshes now, [/] select previous/next needs-you,
+-- Esc closes the logs, then the focus.
 -- Only s and x change anything, and the window half asks before either.
 --
 -- Window-only work travels as inert surface metadata. Windows claim a
@@ -185,6 +186,7 @@ type State = {
 	act_busy: boolean,
 	scope_busy: boolean,
 	pending_read: string?,
+	pending_next: number?,
 	logs: Logs?,
 	notice: Notice?,
 	requests: { common.WindowRequest },
@@ -741,6 +743,42 @@ local function rebuild(state: State)
 	set_cursor(state, if row then row.t.address else nil, if row then i else 0)
 end
 
+-- Navigate the complete current-scope tree, not a filtered or focused view.
+-- Opening a console queues only the latest direction for its normal first list.
+local function next_needs(state: State, step: number): boolean
+	local terms = state.terms
+	if terms == nil then
+		state.pending_next = step
+		set_notice(state, if state.problem
+			then "No current list is available; navigation will wait for the next successful refresh."
+			else "Waiting for the first list; will select the " .. (if step == 1 then "next" else "previous") .. " terminal that needs you.", "muted")
+		return false
+	end
+	local ordered = tree(terms)
+	local at = if step == 1 then 0 else #ordered + 1
+	for i, row in ordered do
+		if row.t.address == state.cursor then at = i; break end
+	end
+	local fetched = state.fetched
+	local stale = state.problem ~= nil or (fetched ~= nil and os.time() - fetched > 2 * POLL_MS / 1000)
+	for offset = 1, #ordered do
+		local row = ordered[(at - 1 + step * offset) % #ordered + 1]
+		if matches("needs", row.t) then
+			state.subtree = nil
+			state.filter = "needs"
+			set_cursor(state, row.t.address, 1)
+			rebuild(state)
+			set_notice(state, "Selected " .. label_of(row.t) .. (if stale
+				then " from the cached list; it may be out of date."
+				else " — needs you."), if stale then "warning" else "muted")
+			return true
+		end
+	end
+	set_notice(state, "No blocked or errored terminals in this scope" .. (if stale
+		then " in the cached list; it may be out of date." else "."), if stale then "warning" else "muted")
+	return false
+end
+
 -- A toast for a status change the person may not be looking at. Tern's
 -- toasts are success, info or error only, so blocked is an info toast (the
 -- table still draws it in the warning tone).
@@ -883,7 +921,9 @@ local function apply(state: State, terms: { Term }, hidden: number, machines: { 
 	end
 	state.details = details
 
-	rebuild(state)
+	local pending = state.pending_next
+	state.pending_next = nil
+	if pending == nil or not next_needs(state, pending) then rebuild(state) end
 	if gone then
 		probe_gone(state, gone, gone_live)
 	end
@@ -965,6 +1005,7 @@ local function switch_scope(state: State, value: string)
 	state.gen += 1
 	state.scope_epoch += 1
 	state.pending_read = nil
+	state.pending_next = nil
 	state.requests = {}
 	state.terms = nil
 	state.by_addr, state.kids, state.rows = {}, {}, {}
@@ -1851,11 +1892,13 @@ local LEGEND: { { string } } = {
 	{ "home/end", "jump" },
 	{ "enter", "watch" },
 	{ "1–4 tab", "filter" },
+	{ "[/]", "needs you" },
 }
 local LEGEND_SHORT: { { string } } = {
 	{ "↑↓", "select" },
 	{ "enter", "watch" },
 	{ "tab", "filter" },
+	{ "[/]", "needs" },
 }
 
 local function legend(compact: boolean): Node
@@ -2064,6 +2107,8 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 	elseif act_name == "herd_scope" and value then
 		local ok, run = pcall(tern.json.decode, value)
 		if ok and type(run) == "string" then switch_scope(state, run) end
+	elseif act_name == "herd_next" and (value == "1" or value == "-1") then
+		next_needs(state, if value == "1" then 1 else -1)
 	elseif act_name == "finished" then
 		toggle_finished(state)
 	elseif act_name == "mute" then
@@ -2115,10 +2160,15 @@ tern.block.define("herd", {
 		end
 		local s: any = if type(saved) == "table" then saved else {}
 		local run: string? = nil
+		local initial_action: string? = nil
 		for _, a in args do
 			local v = string.match(a, "^run=(.+)$")
 			if v then
 				run = v
+			end
+			local action = string.match(a, "^initial_action=(.+)$")
+			if action == "scope" or action == "herd_next=1" or action == "herd_next=-1" then
+				initial_action = action
 			end
 		end
 		if s.run ~= nil then
@@ -2166,6 +2216,7 @@ tern.block.define("herd", {
 			act_busy = false,
 			scope_busy = false,
 			pending_read = nil,
+			pending_next = nil,
 			logs = nil,
 			notice = nil,
 			requests = {},
@@ -2173,6 +2224,11 @@ tern.block.define("herd", {
 		running[cx.pane] = state
 		refresh(state)
 		poll(state)
+		-- Launch actions are for the first init only, never replayed on restore.
+		if saved == nil and initial_action then
+			local name, value = string.match(initial_action, "^([%w_]+)=(.*)$")
+			on_action(state, cx, name or initial_action, value)
+		end
 		return state
 	end,
 
@@ -2257,11 +2313,12 @@ tern.block.define("herd", {
 		return {
 			main = ui.node("col", { role = "herd.console", herd_requests = state.requests,
 				herd_scope = state.run or "", herd_scopes = recent_scopes(), herd_generation = state.scope_epoch,
+				herd_cursor = state.cursor or "",
 				herd_summary = { working = summary_counts.working or 0, blocked = summary_counts.blocked or 0,
 					errors = summary_counts.error or 0, run = state.run or "" } }, {
 				ui.node("col", { key = "page", role = "herd.page", gap = "lg" }, main),
 			}),
-			dock = if state.terms then dock_view(state, compact) else nil,
+			dock = if state.terms or state.notice then dock_view(state, compact) else nil,
 		}
 	end,
 
@@ -2275,6 +2332,8 @@ tern.block.define("herd", {
 			cycle_filter(state, if key.shift then -1 else 1)
 		elseif k == "1" or k == "2" or k == "3" or k == "4" then
 			set_filter(state, FILTERS[tonumber(k) :: number])
+		elseif k == "]" or k == "[" then
+			next_needs(state, if k == "]" then 1 else -1)
 		elseif key.name == "up" or k == "k" then
 			move(state, i - 1)
 		elseif key.name == "down" or k == "j" then
