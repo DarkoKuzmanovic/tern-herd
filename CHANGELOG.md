@@ -7,6 +7,11 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 ## [Unreleased]
 
+### Added
+
+- Run picker in the console and palette, with remembered labels, saved scope,
+  scope-aware status counts and confirmations that cannot cross scope changes.
+
 ## [0.2.2] - 2026-11-05
 
 ### Fixed

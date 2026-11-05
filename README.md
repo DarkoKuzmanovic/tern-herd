@@ -10,6 +10,7 @@ Watch and steer [herdr-core](https://herdr.dev) terminals and coding agents from
 
 - A parent–child tree of terminals, with agent, status, turn counter and worktree.
 - **All**, **Needs you**, **Working** and **Done** filters, subtree focus and finished terminals.
+- A run picker with remembered labels: switch scopes without reopening the console.
 - A selected-terminal card with model, status age, parent, worktree and exit details; logs on demand.
 - Read-only watch splits, full attach splits, and confirmed send/interrupt actions.
 - Transition toasts, a mute switch and a status-line count of working, blocked and errored agents.
@@ -76,6 +77,7 @@ It focuses an existing Herd block or opens one beside the current pane. Agents r
 |---|---|
 | ↑ / ↓, k / j; Home / End, g / G; PgUp / PgDn | Select a terminal |
 | 1–4, Tab / Shift+Tab | All / Needs you / Working / Done |
+| u | Choose All terminals or a remembered/typed run label |
 | Enter / o, double-click | Watch in a read-only split |
 | a | Attach in a writable split |
 | l | Read the last 40 lines into a logs card |
@@ -96,12 +98,12 @@ Only the selected terminal gets an `hc get` request; logs are read only when ask
 The block posts each action request where only window halves with the plugin can see it.
 Exactly one of them claims it and opens the split, git block or dialog; no link goes to another client, so nothing reaches a system browser.
 The host rechecks confirmed send/interrupt actions against its latest terminal list.
-Status counts cross to the window through Tern's local key-value store; no separate server is added.
+Status counts cross to the window through scope-specific surface metadata; no separate server is added.
 Finished terminals can disappear between polls; [the guide explains which finishes can toast](plugins/herd/README.md#toasts).
 
 ## Configuration and privacy
 
-No config file is needed. Filter, subtree focus, selected terminal, finished visibility and mute settings survive reloads in Tern's local plugin storage. A block opened with a `run=<id>` argument filters `hc ls` by that run label; the normal palette command lists all terminals.
+No config file is needed. Filter, subtree focus, selected terminal, finished visibility, mute and run scope survive reloads in Tern's local plugin storage. Press **u**, click **Run…**, or choose **Choose Herd run scope** in the palette to switch between **All terminals** and a run label. The picker makes one `hc --json` request to discover live labels (which `hc ls` omits), and remembers up to 12 labels, including labels seen in selected-terminal details. Typed labels remain available when discovery fails or a run is no longer live. A block's `run=<id>` argument supplies its initial scope; the saved choice wins on reload.
 
 The plugin reads terminal names, working directories, machine names, command-line details and, on request, terminal output through your local `hc`. Those can contain private data. Send and Interrupt affect real terminals after confirmation. Do not publish screenshots of your live window or copy real terminal output into fixtures; all shipped examples use `/home/alex`, `shop` and `build-box`.
 

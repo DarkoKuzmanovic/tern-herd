@@ -19,19 +19,18 @@ local function find_herd(cx: WindowCx): PaneInfo?
 	return nil
 end
 
-local function open_herd(cx: WindowCx)
+local function open_herd(cx: WindowCx): number?
 	local pane = find_herd(cx)
 	if pane then
-		if pane.parked then
-			cx.layout:unpark(pane.pane)
-		else
-			cx.layout:focus(pane.pane)
-		end
-		return
+		if pane.parked then cx.layout:unpark(pane.pane) end
+		cx.layout:focus(pane.pane)
+		return pane.pane
 	end
-	if cx:new_block(KIND, nil, "beside") == nil then
+	local created = cx:new_block(KIND, nil, "beside")
+	if created == nil then
 		cx:toast("error", "Herd is not loaded on this host", "Install the plugin where your panes run.")
 	end
+	return created
 end
 
 tern.command({
@@ -42,6 +41,38 @@ tern.command({
 })
 
 tern.bind(if tern.runtime.os == "macos" then "cmd+alt+shift+h" else "ctrl+alt+shift+h", ACTION)
+
+tern.command({
+	id = "scope", title = "Choose Herd run scope", icon = "users",
+	run = function(cx: WindowCx)
+		local pane = open_herd(cx)
+		if pane then cx.session:event(pane, { ev = "action", id = "main", act = "scope" }) end
+	end,
+})
+
+local function choose_scope(cx: WindowCx, block: number, request: common.WindowRequest)
+	local items: { PickItem } = {
+		{ label = "All terminals", run = "", current = request.address == "" },
+		{ label = "Enter run label…", typed = true, detail = "Type a run label" },
+	}
+	for _, run in request.scopes or {} do
+		table.insert(items, { label = "Run " .. run, run = run, current = request.address == run })
+	end
+	cx:pick({ items = items, placeholder = "Choose Herd run scope", icon = "users" })
+		:next(function(choice: PickItem?, _err: string?, wcx: WindowCx?)
+			if not choice or not wcx then return end
+			if choice.typed then
+				wcx:prompt({ placeholder = "Run label (run=…)", action = "switch" })
+					:next(function(value: string?, _why: string?, current: WindowCx?)
+						if value and current then
+							current.session:event(block, { ev = "action", id = "main", act = "herd_scope=" .. tern.json.encode(value) })
+						end
+					end)
+			else
+				wcx.session:event(block, { ev = "action", id = "main", act = "herd_scope=" .. tern.json.encode(choice.run) })
+			end
+		end)
+end
 
 local function preview(text: string): string
 	local one = string.gsub(text, "%s+", " ")
@@ -61,7 +92,7 @@ local function attach(cx: WindowCx, beside: number, address: string, observe: bo
 	end
 end
 
-local function ask_send(cx: WindowCx, block: number, address: string, label: string)
+local function ask_send(cx: WindowCx, block: number, address: string, label: string, generation: number?)
 	cx:prompt({ placeholder = "Prompt for " .. label, icon = "send", action = "review" })
 		:next(function(text: string?, _err: string?, cx2: WindowCx?)
 			if text == nil or string.match(text :: string, "^%s*$") or cx2 == nil then
@@ -79,14 +110,14 @@ local function ask_send(cx: WindowCx, block: number, address: string, label: str
 			}):next(function(choice: PickItem?, _err2: string?, cx3: WindowCx?)
 				if choice and choice.go == true and cx3 then
 					local wcx3: WindowCx = cx3
-					local value = tern.json.encode({ address = address, text = text })
+					local value = tern.json.encode({ address = address, text = text, generation = generation })
 					wcx3.session:event(block, { ev = "action", id = "main", act = "herd_send=" .. value })
 				end
 			end)
 		end)
 end
 
-local function ask_interrupt(cx: WindowCx, block: number, address: string, label: string)
+local function ask_interrupt(cx: WindowCx, block: number, address: string, label: string, generation: number?)
 	cx:pick({
 		items = {
 			{ label = "Interrupt " .. label, detail = "hc interrupt " .. address, icon = "stop", go = true },
@@ -98,7 +129,7 @@ local function ask_interrupt(cx: WindowCx, block: number, address: string, label
 	}):next(function(choice: PickItem?, _err: string?, cx2: WindowCx?)
 		if choice and choice.go == true and cx2 then
 			local wcx: WindowCx = cx2
-			wcx.session:event(block, { ev = "action", id = "main", act = "herd_interrupt=" .. address })
+			wcx.session:event(block, { ev = "action", id = "main", act = "herd_interrupt=" .. tern.json.encode({ address = address, generation = generation }) })
 		end
 	end)
 end
@@ -125,11 +156,13 @@ local function dispatch(cx: WindowCx, pane: number, request: common.WindowReques
 	if verb == "watch" or verb == "attach" then
 		attach(cx, pane, address, verb == "watch", request.hc)
 	elseif verb == "send" then
-		ask_send(cx, pane, address, name)
+		ask_send(cx, pane, address, name, request.generation)
 	elseif verb == "interrupt" then
-		ask_interrupt(cx, pane, address, name)
+		ask_interrupt(cx, pane, address, name, request.generation)
 	elseif verb == "worktree" then
 		open_worktree(cx, address, name)
+	elseif verb == "scope" then
+		choose_scope(cx, pane, request)
 	end
 end
 
@@ -209,22 +242,25 @@ request_timer = tern.timer(0, poll_requests)
 
 -- Status segment: counts the host half publishes in kv while a Herd block
 -- polls, read on a timer (formatters must stay pure and fast).
-type Summary = { working: number, blocked: number, errors: number }
+type Summary = { working: number, blocked: number, errors: number, run: string }
 local summary: Summary? = nil
 
 local function same(a: Summary?, b: Summary?): boolean
 	if a == nil or b == nil then
 		return a == b
 	end
-	return a.working == b.working and a.blocked == b.blocked and a.errors == b.errors
+	return a.working == b.working and a.blocked == b.blocked and a.errors == b.errors and a.run == b.run
 end
 
 local function tick(cx: WindowCx?)
 	local next: Summary? = nil
-	if cx and find_herd(cx :: WindowCx) then
-		local ok, s = pcall(tern.kv.get, common.KV_SUMMARY)
-		if ok and type(s) == "table" and type(s.working) == "number" then
-			local n: Summary = { working = s.working, blocked = tonumber(s.blocked) or 0, errors = tonumber(s.errors) or 0 }
+	local pane = if cx then find_herd(cx) else nil
+	if cx and pane then
+		local surface = cx.session:surface(pane.pane, { root = "main", depth = 0, nodes = 1 })
+		local root = if type(surface) == "table" then surface.main else nil
+		local s = if root and root.p then root.p.herd_summary else nil
+		if type(s) == "table" and type(s.working) == "number" then
+			local n: Summary = { working = s.working, blocked = tonumber(s.blocked) or 0, errors = tonumber(s.errors) or 0, run = s.run or "" }
 			if n.working + n.blocked + n.errors > 0 then
 				next = n
 			end
@@ -244,7 +280,7 @@ tern.chrome.status(function(_pane: StatusPaneInfo): { StatusSegment }?
 	if s == nil then
 		return nil
 	end
-	local text = "herd " .. s.working .. " working"
+	local text = "herd" .. (if s.run ~= "" then " [" .. s.run .. "]" else "") .. " " .. s.working .. " working"
 	if s.blocked > 0 then
 		text ..= " · " .. s.blocked .. " blocked"
 	end

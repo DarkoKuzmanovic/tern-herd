@@ -166,6 +166,7 @@ type State = {
 	remotes: number,
 	loading: boolean,
 	gen: number,
+	scope_epoch: number,
 	fetched: number?,
 	last_stdout: string?,
 	problem: Problem?,
@@ -179,6 +180,11 @@ type State = {
 	toasted: { [string]: string },
 	details: { [string]: Detail },
 	detail_timer: TimerHandle?,
+	detail_busy: boolean,
+	read_busy: boolean,
+	act_busy: boolean,
+	scope_busy: boolean,
+	pending_read: string?,
 	logs: Logs?,
 	notice: Notice?,
 	requests: { common.WindowRequest },
@@ -189,7 +195,7 @@ local running: { [number]: State } = {}
 
 -- The hc that last started, and what the kv store last heard.
 local hc_path: string? = nil
-local last_summary = ""
+local last_summary: { [number]: string } = {}
 local request_serial = 0
 
 local function str(v: any): string?
@@ -200,6 +206,28 @@ local function num(v: any): number?
 	return if type(v) == "number" then v else nil
 end
 
+
+local function recent_scopes(): { string }
+	local out: { string } = {}
+	local ok, saved = pcall(tern.kv.get, common.KV_SCOPES)
+	if ok and type(saved) == "table" then
+		for _, value in saved do
+			local run = common.scope(value)
+			if run and not table.find(out, run) and #out < 12 then table.insert(out, run) end
+		end
+	end
+	return out
+end
+
+local function remember_scope(run: string?)
+	if not run then return end
+	local scopes = recent_scopes()
+	local index = table.find(scopes, run)
+	if index then table.remove(scopes, index) end
+	table.insert(scopes, 1, run)
+	while #scopes > 12 do table.remove(scopes) end
+	pcall(tern.kv.set, common.KV_SCOPES, scopes)
+end
 -- Epoch milliseconds to epoch seconds.
 local function secs(v: any): number?
 	return if type(v) == "number" then v / 1000 else nil
@@ -209,6 +237,8 @@ local function retire(state: State)
 	if running[state.cx.pane] == state then
 		running[state.cx.pane] = nil
 	end
+	last_summary[state.cx.pane] = nil
+	pcall(tern.kv.set, common.KV_SUMMARY .. ":" .. state.cx.pane, nil)
 	if state.timer then
 		state.timer:cancel()
 		state.timer = nil
@@ -607,26 +637,33 @@ local function publish(state: State)
 		working = c.working or 0,
 		blocked = c.blocked or 0,
 		errors = c.error or 0,
+		run = state.run or "",
+		pane = state.cx.pane,
 	}
 	local text = tern.json.encode(summary)
-	if text ~= last_summary then
-		last_summary = text
-		pcall(tern.kv.set, common.KV_SUMMARY, summary)
+	if text ~= last_summary[state.cx.pane] then
+		last_summary[state.cx.pane] = text
+		pcall(tern.kv.set, common.KV_SUMMARY .. ":" .. state.cx.pane, summary)
 	end
 end
 
 -- Fetches the card's `hc get` for `address`, unless one is running or the
 -- last answer is younger than 10 seconds.
 local function fetch_detail(state: State, address: string)
+	if state.detail_busy then return end
 	local d = state.details[address]
 	if d and (d.loading or (d.at and tern.now() - (d.at :: number) < DETAIL_MAX_AGE_MS)) then
 		return
 	end
 	local entry: Detail = d or { info = nil, error = nil, loading = false, at = nil }
 	entry.loading = true
+	state.detail_busy = true
 	state.details[address] = entry
 	local spawn_error = run_hc({ "get", address, "--json" }, GET_TIMEOUT_MS, function(result)
-		if not alive(state) or state.details[address] ~= entry then
+		if not alive(state) then return end
+		state.detail_busy = false
+		if state.details[address] ~= entry then
+			if state.cursor then fetch_detail(state, state.cursor) end
 			return
 		end
 		entry.loading = false
@@ -635,6 +672,7 @@ local function fetch_detail(state: State, address: string)
 			local info = parse_info(result.stdout)
 			if info then
 				entry.info = info
+				remember_scope(info.run)
 				entry.error = nil
 			else
 				entry.error = "hc get printed something other than a terminal."
@@ -645,6 +683,7 @@ local function fetch_detail(state: State, address: string)
 		state.cx:render()
 	end)
 	if spawn_error then
+		state.detail_busy = false
 		entry.loading = false
 		entry.at = tern.now()
 		entry.error = "Tern could not start hc: " .. spawn_error
@@ -732,8 +771,9 @@ end
 -- on): one `hc get` says whether it finished, so the person hears it.
 local function probe_gone(state: State, t: Term, was_live: boolean)
 	local label = label_of(t)
+	local epoch = state.scope_epoch
 	local spawn_error = run_hc({ "get", t.address, "--json" }, GET_TIMEOUT_MS, function(result)
-		if not alive(state) then
+		if not alive(state) or state.scope_epoch ~= epoch then
 			return
 		end
 		local info = if result.status == 0 then parse_info(result.stdout) else nil
@@ -910,6 +950,41 @@ local function refresh(state: State)
 	end
 end
 
+local function switch_scope(state: State, value: string)
+	local run = common.scope(value)
+	if value ~= "" and run == nil then
+		set_notice(state, "Run labels must be 1–128 characters without control characters.", "warning")
+		return
+	end
+	if run == state.run then return end
+	state.run = run
+	remember_scope(run)
+	state.gen += 1
+	state.scope_epoch += 1
+	state.pending_read = nil
+	state.requests = {}
+	state.terms = nil
+	state.by_addr, state.kids, state.rows = {}, {}, {}
+	state.cursor, state.subtree = nil, nil
+	state.index = 1
+	state.details, state.seen, state.toasted = {}, {}, {}
+	state.logs, state.last_stdout, state.fetched, state.problem = nil, nil, nil, nil
+	state.baseline = false
+	if state.detail_timer then state.detail_timer:cancel(); state.detail_timer = nil end
+	local ok, saved = pcall(tern.kv.get, common.KV_PANE_SCOPES)
+	local entries: { any } = if ok and type(saved) == "table" then saved else {}
+	local next_entries: { any } = { { pane = state.cx.pane, run = run or "" } }
+	for _, entry in entries do
+		if type(entry) == "table" and entry.pane ~= state.cx.pane and #next_entries < 32 then
+			table.insert(next_entries, entry)
+		end
+	end
+	pcall(tern.kv.set, common.KV_PANE_SCOPES, next_entries)
+	set_notice(state, if run then "Run " .. run else "All terminals", "muted")
+	publish(state)
+	refresh(state)
+end
+
 -- One pending timer per live run.
 local function poll(state: State)
 	if not alive(state) or state.timer then
@@ -928,6 +1003,11 @@ end
 
 -- Reads the selected terminal, or a logs card's explicit target, once.
 local function read_logs(state: State, address: string?)
+	if state.read_busy then
+		state.pending_read = address or state.cursor
+		set_notice(state, "Waiting for the current read; the latest logs request is queued.", "muted")
+		return
+	end
 	local target = address or state.cursor
 	local t = if target then state.by_addr[target :: string] else nil
 	if not t then
@@ -945,8 +1025,14 @@ local function read_logs(state: State, address: string?)
 		at = nil,
 	}
 	state.logs = logs
+	state.read_busy = true
 	local spawn_error = run_hc({ "read", term.address, "--lines", tostring(READ_LINES) }, READ_TIMEOUT_MS, function(result)
-		if not alive(state) or state.logs ~= logs then
+		if not alive(state) then return end
+		state.read_busy = false
+		local pending = state.pending_read
+		state.pending_read = nil
+		if state.logs ~= logs then
+			if pending then read_logs(state, pending) end
 			return
 		end
 		logs.loading = false
@@ -958,8 +1044,10 @@ local function read_logs(state: State, address: string?)
 			logs.error = failure(result, "hc read", READ_TIMEOUT_MS)
 		end
 		state.cx:render()
+		if pending then read_logs(state, pending) end
 	end)
 	if spawn_error then
+		state.read_busy = false
 		logs.loading = false
 		logs.error = "Tern could not start hc: " .. spawn_error
 	end
@@ -967,11 +1055,17 @@ end
 
 -- Runs a confirmed send or interrupt and reports how it went.
 local function act(state: State, verb: string, args: { string }, label: string)
+	if state.act_busy then
+		set_notice(state, "An action is still running; wait for its result.", "warning")
+		return
+	end
+	state.act_busy = true
 	set_notice(state, (if verb == "send" then "Sending to " else "Interrupting ") .. label .. "…", "muted")
 	local spawn_error = run_hc(args, ACT_TIMEOUT_MS, function(result)
 		if not alive(state) then
 			return
 		end
+		state.act_busy = false
 		if result.status == 0 then
 			local said = first_lines(result.stdout, 1)
 			local ok, data = pcall(tern.json.decode, result.stdout)
@@ -987,6 +1081,7 @@ local function act(state: State, verb: string, args: { string }, label: string)
 		refresh(state)
 	end)
 	if spawn_error then
+		state.act_busy = false
 		set_notice(state, "Tern could not start hc: " .. spawn_error, "error")
 	end
 end
@@ -1219,10 +1314,7 @@ end
 
 local function head_view(state: State): Node
 	local spans: { Span | string } = { ui.span("Herd", "title") }
-	local meta = "   herdr-core"
-	if state.run then
-		meta ..= " · run " .. (state.run :: string)
-	end
+	local meta = "   herdr-core · " .. (if state.run then "run " .. (state.run :: string) else "All terminals")
 	if state.loading and not state.fetched then
 		meta ..= " · loading"
 	elseif state.fetched then
@@ -1246,6 +1338,7 @@ local function head_view(state: State): Node
 		})
 	end
 	local controls: { Node } = {
+		button("Run…", "scope", { icon = "tag", keys = { "u" }, title = "Switch run scope" }),
 		toggle("Finished", "history", "finished", state.finished, "h", "Show finished terminals (hc ls --all)"),
 		toggle("Mute", "bell", "mute", state.muted, "m", "Mute status toasts"),
 		button("Refresh", "refresh", {
@@ -1836,11 +1929,17 @@ local function toggle_mute(state: State)
 end
 
 local function enqueue_window(state: State, verb: string, address: string, label: string)
+	if #state.requests >= 16 then
+		set_notice(state, "Too many pending Herd actions; wait for a window to respond.", "warning")
+		return
+	end
 	request_serial += 1
 	local request: common.WindowRequest = {
 		id = tostring(tern.now()) .. ":" .. request_serial,
 		verb = verb, address = address, label = label,
 		hc = hc_path or "hc", expires = tern.now() + 5000,
+		generation = state.scope_epoch,
+		scopes = if verb == "scope" then recent_scopes() else nil,
 	}
 	table.insert(state.requests, request)
 	tern.timer(5000, function()
@@ -1856,9 +1955,49 @@ local function enqueue_window(state: State, verb: string, address: string, label
 	end)
 end
 
+-- Bare `hc --json` retains Terminal.labels, unlike the reduced `hc ls`
+-- projection. Discover live run labels once when asked, not per row/poll.
+local function choose_scope(state: State)
+	if state.scope_busy then return end
+	state.scope_busy = true
+	local generation = state.scope_epoch
+	local spawn_error = run_hc({ "--json" }, LS_TIMEOUT_MS, function(result)
+		if not alive(state) then return end
+		state.scope_busy = false
+		if state.scope_epoch ~= generation then return end
+		local ok, data = pcall(tern.json.decode, result.stdout)
+		if result.status == 0 and ok and type(data) == "table" and type(data.terminals) == "table" then
+			local found: { [string]: boolean } = {}
+			local total = 0
+			for _, terminal in data.terminals do
+				local run = if type(terminal) == "table" and type(terminal.labels) == "table"
+					then common.scope(terminal.labels.run) else nil
+				if run and not found[run] then
+					remember_scope(run)
+					found[run] = true
+					total += 1
+					if total == 12 then break end
+				end
+			end
+		else
+			set_notice(state, "Run discovery unavailable; choose a remembered label or type one.", "warning")
+		end
+		enqueue_window(state, "scope", state.run or "", "Run scope")
+		state.cx:render()
+	end)
+	if spawn_error then
+		state.scope_busy = false
+		enqueue_window(state, "scope", state.run or "", "Run scope")
+	end
+end
+
 -- Ask one window to do `verb` for the selected terminal. Never broadcast an
 -- open effect: replicas without window.luau would launch a system browser.
 local function ask_window(state: State, cx: BlockCx, verb: string)
+	if verb == "scope" then
+		choose_scope(state)
+		return
+	end
 	local t = selected(state)
 	if not t then
 		set_notice(state, "No terminal selected.", "muted")
@@ -1911,6 +2050,11 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 	end
 	if act_name == "retry" or act_name == "refresh" then
 		refresh(state)
+	elseif act_name == "scope" then
+		ask_window(state, cx, "scope")
+	elseif act_name == "herd_scope" and value then
+		local ok, run = pcall(tern.json.decode, value)
+		if ok and type(run) == "string" then switch_scope(state, run) end
 	elseif act_name == "finished" then
 		toggle_finished(state)
 	elseif act_name == "mute" then
@@ -1930,7 +2074,7 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 		rebuild(state)
 	elseif act_name == "herd_send" and value then
 		local ok, data = pcall(tern.json.decode, value)
-		if ok and type(data) == "table" and str(data.address) and type(data.text) == "string" then
+		if ok and type(data) == "table" and str(data.address) and type(data.text) == "string" and data.generation == state.scope_epoch then
 			local t = state.by_addr[data.address]
 			if not t or t.state ~= "live" then
 				set_notice(state, "Not sent: " .. data.address .. " is no longer live.", "warning")
@@ -1939,13 +2083,15 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 			end
 		end
 	elseif act_name == "herd_interrupt" and value and value ~= "" then
-		local t = state.by_addr[value]
+		local ok, data = pcall(tern.json.decode, value)
+		if not ok or type(data) ~= "table" or data.generation ~= state.scope_epoch or type(data.address) ~= "string" then return end
+		local t = state.by_addr[data.address]
 		if not t then
-			set_notice(state, "Not interrupted: " .. value .. " left the list.", "warning")
+			set_notice(state, "Not interrupted: " .. data.address .. " left the list.", "warning")
 		elseif not interruptible(t) then
 			set_notice(state, "Not interrupted: " .. label_of(t) .. " is " .. status_of(t) .. " now.", "warning")
 		else
-			act(state, "interrupt", { "interrupt", value }, label_of(t))
+			act(state, "interrupt", { "interrupt", data.address }, label_of(t))
 		end
 	end
 end
@@ -1966,6 +2112,17 @@ tern.block.define("herd", {
 				run = v
 			end
 		end
+		if s.run ~= nil then
+			run = common.scope(s.run)
+		else
+			local ok, entries = pcall(tern.kv.get, common.KV_PANE_SCOPES)
+			if ok and type(entries) == "table" then
+				for _, entry in entries do
+					if type(entry) == "table" and entry.pane == cx.pane then run = common.scope(entry.run); break end
+				end
+			end
+		end
+		remember_scope(run)
 		local filter = str(s.filter)
 		local state: State = {
 			cx = cx,
@@ -1981,6 +2138,7 @@ tern.block.define("herd", {
 			remotes = 0,
 			loading = false,
 			gen = 0,
+			scope_epoch = tern.now(),
 			fetched = nil,
 			last_stdout = nil,
 			problem = nil,
@@ -1994,6 +2152,11 @@ tern.block.define("herd", {
 			toasted = {},
 			details = {},
 			detail_timer = nil,
+			detail_busy = false,
+			read_busy = false,
+			act_busy = false,
+			scope_busy = false,
+			pending_read = nil,
 			logs = nil,
 			notice = nil,
 			requests = {},
@@ -2014,7 +2177,8 @@ tern.block.define("herd", {
 		if needs > 0 then
 			table.insert(parts, needs .. " need you")
 		end
-		return if #parts > 0 then "Herd · " .. table.concat(parts, " · ") else "Herd"
+		local title = if state.run then "Herd · " .. (state.run :: string) else "Herd · All terminals"
+		return if #parts > 0 then title .. " · " .. table.concat(parts, " · ") else title
 	end,
 
 	view = function(state: State, cx: BlockCx): BlockView
@@ -2080,8 +2244,12 @@ tern.block.define("herd", {
 			table.insert(main, ui.node("skeleton", { key = "stats", shape = "card", tiles = 4 }))
 			table.insert(main, ui.node("skeleton", { key = "view", shape = "rows", rows = 6 }))
 		end
+		local summary_counts = counts(state)
 		return {
-			main = ui.node("col", { role = "herd.console", herd_requests = state.requests }, {
+			main = ui.node("col", { role = "herd.console", herd_requests = state.requests,
+				herd_scope = state.run or "", herd_scopes = recent_scopes(), herd_generation = state.scope_epoch,
+				herd_summary = { working = summary_counts.working or 0, blocked = summary_counts.blocked or 0,
+					errors = summary_counts.error or 0, run = state.run or "" } }, {
 				ui.node("col", { key = "page", role = "herd.page", gap = "lg" }, main),
 			}),
 			dock = if state.terms then dock_view(state, compact) else nil,
@@ -2128,6 +2296,8 @@ tern.block.define("herd", {
 			toggle_finished(state)
 		elseif k == "m" then
 			toggle_mute(state)
+		elseif k == "u" then
+			ask_window(state, cx, "scope")
 		elseif k == "r" then
 			refresh(state)
 		elseif key.name == "escape" then
@@ -2177,6 +2347,7 @@ tern.block.define("herd", {
 
 	save = function(state: State): any
 		return {
+			run = state.run or "",
 			cursor = state.cursor,
 			filter = state.filter,
 			subtree = state.subtree,

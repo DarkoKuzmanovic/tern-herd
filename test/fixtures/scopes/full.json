@@ -1,0 +1,24 @@
+{
+  "hidden_finished": 3,
+  "machines": [],
+  "terminals": [
+    {
+      "address":"t61", "agent":"codex", "argv":["codex","--no-daemon"],
+      "cwd":"/home/alex/code/shop/.worktrees/cart", "name":"b1-cart",
+      "labels":{"run":"cart"}, "state":"live", "status":{"app":"codex","state":"working"},
+      "turn":4, "where":"shop / cart"
+    },
+    {
+      "address":"t62", "agent":"codex", "argv":["codex","--no-daemon"],
+      "cwd":"/home/alex/code/shop/.worktrees/checkout", "name":"b2-checkout",
+      "labels":{"run":"checkout"}, "state":"live", "status":{"app":"codex","state":"blocked"},
+      "turn":2, "where":"shop / checkout"
+    },
+    {
+      "address":"t63", "agent":"codex", "argv":["codex","--no-daemon"],
+      "cwd":"/home/alex/code/shop/.worktrees/review", "name":"b3-review",
+      "labels":{}, "state":"live", "status":{"app":"codex","state":"error"},
+      "turn":1, "where":"shop / review"
+    }
+  ]
+}

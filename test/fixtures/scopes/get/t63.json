@@ -1,0 +1,6 @@
+{
+  "address":"t63", "argv":["codex","--no-daemon"], "created_ms":1793865673513,
+  "cwd":"/home/alex/code/shop/.worktrees/review", "name":"b3-review",
+  "labels":{}, "state":"live", "status":{"app":"codex","state":"error","msg":"Late review detail must not replace cart"},
+  "turn":1, "title":"Late review detail must not replace cart"
+}

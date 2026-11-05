@@ -24,6 +24,14 @@ end
 -- status counts for the status-line segment.
 M.KV_HC = "hc_path"
 M.KV_SUMMARY = "summary"
+M.KV_SCOPES = "recent_scopes"
+M.KV_PANE_SCOPES = "pane_scopes"
+
+function M.scope(value: any): string?
+	if type(value) ~= "string" then return nil end
+	local clean = string.match(value, "^%s*(.-)%s*$") or ""
+	return if #clean > 0 and #clean <= 128 and not string.find(clean, "%c") then clean else nil
+end
 
 -- Carried as inert root-node metadata, never as a URL/open effect. The
 -- serial host worker grants each request to one window before it acts.
@@ -35,6 +43,8 @@ export type WindowRequest = {
 	hc: string,
 	expires: number,
 	owner: string?,
+	generation: number?,
+	scopes: { string }?,
 }
 
 -- One POSIX shell word.

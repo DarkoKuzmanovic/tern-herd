@@ -19,7 +19,7 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
 ./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
-./test/actions.sh                                      # actions, arbitration, expiry and opener guard
+./test/actions.sh                                      # actions, run scopes, arbitration, expiry and opener guard
 ```
 
 | option | meaning |
@@ -179,6 +179,7 @@ run prove it, so a PNG can never come from the real herdr-core.
 | file | the fake `hc` answers |
 | --- | --- |
 | `ls.json` | `hc ls --json` |
+| `full.json` | bare `hc --json`: full list envelope with terminal `labels`, used once when the run picker is requested; falls back to root `ls.json`, without advancing any list sequence/failure counter |
 | `ls-all.json` | `hc ls --all --json` (falls back to `ls.json`) |
 | `seq/01.json`, `02.json`, … | one file per `ls` call, sticking on the last: status transitions over 2-second polls |
 | `ls.exit` | exit with this code (on stderr: `ls.stderr`). Combined with `ls.fail-after N`, the first N calls succeed and later ones fail |
@@ -187,12 +188,33 @@ run prove it, so a PNG can never come from the real herdr-core.
 | `get/<addr>.delay` | seconds to answer that `get` in (may be fractional), like a machine over a slow link |
 | `get/<addr>.exit` | with `get/<addr>.stderr`: answer late, then fail with this exit code and that stderr |
 | `get/<addr>.stderr` | what a failing `get` prints: `{"error":{"kind","message","hint"}}` |
+| `scopes/<run>/ls.json`, `ls-all.json`, `seq/`, `ls.exit`, `ls.fail-after`, `ls.stderr` | the list dataset selected by `hc ls --label run=<run> --json` (also accepts `--label=run=<run>`); sequence/failure counters are independent per run |
+| `scopes/<run>/get/<addr>.json`, `.delay`, `.exit`, `.stderr` | details for addresses unique to a scoped dataset; plain `hc get <addr> --json` searches these only when the main fixture has no detail for that address |
 | `read/<addr>.txt` | `hc read <addr> --lines N` (`tail -n N` of it; ANSI allowed) |
 | `expect` | regex the element tree must match before the shot (fixture-only text, e.g. a terminal address) |
 
 An address is used as a path, so a machine-qualified one lands in a nested dir:
 `build-box/t10` reads `get/build-box/t10.json` (or `.delay`/`.exit`/
 `.stderr`) and `read/build-box/t10.txt`. No encoding step to remember.
+
+The fixture root remains the **All terminals** dataset. A nonempty run label
+selects only `scopes/<run>/`; an unknown run returns an empty list rather than
+silently returning all terminals. Run names match directory basenames exactly.
+The same list-file rules (`--all`, sequences, failures) apply inside each run
+directory. Their counters live under the run's private
+`HERD_FIXTURE_STATE/scopes/<run>/`, so switching scope cannot advance another
+scope's sequence.
+
+`full.json` is the unfiltered full-list response for cheap run-label discovery.
+Its `terminals[]` entries keep `labels: {"run":"…"}` and the full status object,
+unlike the short `ls.json` rows. This file is at the fixture root, never under a
+particular scope: discovering another run must not depend on the current run.
+
+`hc get` itself takes no run label. Keep shared/canonical address details under
+the fixture root's `get/`; these always win. Addresses present only in a scoped
+dataset may put their details under that scope's `get/` (searched in pathname
+order). Do not give a scope-only address conflicting detail files in multiple
+scopes. `read/` remains at the fixture root.
 
 `get/<addr>.delay` above the block's `GET_TIMEOUT_MS` (10 s) is what a `get`
 that never answers looks like: the card turns red with
@@ -223,6 +245,7 @@ Shipped fixtures:
 | `degraded` | one good list, then `hc ls` fails: the last list with the dock's warning over it |
 | `remote` | the live herd plus a terminal on another machine, `build-box/t10` (address with a `/`, agent `bash`, cwd `/home/alex`, **no status**), and `machines[]` reporting `build-box` unreachable with `why`; `t43 b9-drafts` working. Its `get` takes `get/build-box/t10.delay` 12 s then `get/build-box/t10.exit` 1 + a `cannot reach build-box` error JSON, so the selected remote row's card shows the load, then `hc get timed out after 10 s.` |
 | `activation` | fictional `spam-192` at `t44`, plus `cart #2 (review/ready)` at `build-box/t45`; action regression data, not a live terminal |
+| `scopes` | All terminals contains `b1-cart` working, `b2-checkout` blocked and `b3-review` error; `scopes/cart/` contains only the cart builder and `scopes/checkout/` only checkout. Cart details are at the fixture root, checkout details are in its scope, and review's selected-card reply is delayed 2 s for scope-switch regression coverage |
 
 Fake data is modelled on the real thing: `hc ls --json` is
 `{hidden_finished, machines:[{name,since_ms,state,why}], terminals:[{address,agent,cwd,state,status,turn,where,name?,parent?}]}`
@@ -258,6 +281,32 @@ It also checks acknowledgement clearing, first-claim
 arbitration, refusal of another owner's acknowledgement, reload discarding
 in-flight state, and a 5-second dock notice for missing/abandoned consumers.
 Every normal run must pass the native/PATH opener guard.
+
+Run-scope cases use the fictional `scopes` fixture to assert the rows actually
+change, not just the title or outgoing `--label` argument. They cover the `u`
+key, the Run… head action, typed labels, remembered choices through
+`plugin.herd.scope`, All terminals, and unknown/empty runs. The head action is
+sent directly through the production host event handler; key and palette cases
+drive the production window picker. The cases also check selected-row-only
+detail fetching, root `herd_scope`/`herd_summary` agreement, and simultaneous
+Herd panes with different run counts (no cross-pane summary contamination).
+
+The discovery case asserts no full-list request before the picker, then exactly
+one bare `hc --json` request makes the unselected checkout builder's run label
+available without requesting that builder's `get`. Selecting the discovered
+choice must change the actual rows and scope summary. A later normal host poll
+must not issue another full-list discovery request.
+
+Reload cases assert `pane_scopes` and the 12-entry `recent_scopes` MRU persist.
+Pending-request cases switch scopes with an unconsumed request, with real
+send/interrupt confirmations open, and with a delayed selected-card `get` in
+flight. A stale generation must be refused even after switching back to a run
+that contains the original address; confirmations must never retarget a new
+run's selected row. A separate confirmation case toggles Finished through the
+host action (as another replica could) while the send confirmation is open:
+changing list visibility must still permit exactly one send to the original
+address. These cases use only the isolated control socket, fake hc and the
+same opener guard as the other action checks.
 
 `tern serve` is a standalone headless window, not a daemon session to which a
 second real client can attach. The competing-consumer test instead loads a

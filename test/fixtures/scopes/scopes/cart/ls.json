@@ -1,0 +1,7 @@
+{
+  "hidden_finished": 1,
+  "machines": [],
+  "terminals": [
+    {"address":"t61","agent":"codex","cwd":"/home/alex/code/shop/.worktrees/cart","name":"b1-cart","state":"live","status":"working","turn":4,"where":"shop / cart"}
+  ]
+}

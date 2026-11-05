@@ -5,7 +5,7 @@
 # (sequence counter, action log) in $HERD_FIXTURE_STATE. Nothing talks to a
 # real herdr-core: every answer is a file.
 #
-#   HERD_FIXTURE        fixture dir (ls.json, ls-all.json, seq/, get/, read/)
+#   HERD_FIXTURE        fixture dir (ls.json, full.json, seq/, get/, read/, scopes/<run>/)
 #   HERD_FIXTURE_STATE  writable scratch dir for this run
 #
 # An address is used as a path, so a machine-qualified one ("build-box/t10")
@@ -13,7 +13,7 @@
 # `get` also takes get/<addr>.delay (seconds to answer in), and
 # get/<addr>.exit + .stderr (answer, then fail with that code and stderr).
 #
-# Supported: ls [--all] [--json] [--label K=V]…, get ADDR [--json],
+# Supported: --json (full list with labels), ls [--all] [--json] [--label K=V]…, get ADDR [--json],
 # read ADDR [--lines N], send/interrupt/keys/kill/rm (logged, never real), and
 # attach [--observe] [--history N] ADDR (banner + fixture transcript, then stays
 # open — a pane the plugin split, never a client of a real herdr-core terminal).
@@ -43,15 +43,56 @@ cmd="${1:-}"
 [ $# -gt 0 ] && shift
 
 case "$cmd" in
+--json)
+  [ $# -eq 0 ] || die_usage "--json $*"
+  # Bare hc --json keeps full terminal fields (including labels), unlike
+  # the short ls projection. Discovery does not advance any polling sequence.
+  f="$fixture/full.json"
+  [ -f "$f" ] || f="$fixture/ls.json"
+  if [ ! -f "$f" ]; then
+    echo "{\"error\":{\"kind\":\"error\",\"message\":\"fixture $fixture has no full.json or ls.json\"}}" >&2
+    exit 1
+  fi
+  cat "$f"
+  ;;
 ls)
   all=0
-  for a in "$@"; do
-    case "$a" in
-    --json) ;;
-    --all) all=1 ;;
-    --label | --label=* | *) ;; # labels narrow the list; the fake ignores them
+  run=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --json) shift ;;
+    --all) all=1; shift ;;
+    --label)
+      [ $# -ge 2 ] || die_usage "ls --label without a value"
+      case "$2" in run=*) run=${2#run=} ;; esac
+      shift 2
+      ;;
+    --label=*)
+      label=${1#--label=}
+      case "$label" in run=*) run=${label#run=} ;; esac
+      shift
+      ;;
+    *) die_usage "ls $*" ;;
     esac
   done
+  # Run labels choose a complete list dataset, with independent failure and
+  # sequence counters. Unknown runs are empty, never the unfiltered fixture.
+  if [ -n "$run" ]; then
+    scoped=""
+    for candidate in "$fixture/scopes/"*; do
+      if [ -d "$candidate" ] && [ "${candidate##*/}" = "$run" ]; then
+        scoped=$candidate
+        break
+      fi
+    done
+    if [ -z "$scoped" ]; then
+      echo '{"hidden_finished":0,"machines":[],"terminals":[]}'
+      exit 0
+    fi
+    fixture=$scoped
+    state="$state/scopes/$run"
+    mkdir -p "$state"
+  fi
   # ls.exit: fail outright, or (with ls.fail-after N) only from call N+1 on, so
   # a fixture can be good once and then break under a loaded block.
   if [ -f "$fixture/ls.exit" ]; then
@@ -98,6 +139,17 @@ get)
   # the fixture's own directories, so the remote one is a nested path:
   # get/build-box/t10.json. Same for read/<addr>.txt.
   base="$fixture/get/$addr"
+  # `get` has no run label in hc. Main-fixture details remain canonical; an
+  # address unique to a run may keep its details beside that run's list.
+  if [ ! -f "$base.json" ] && [ ! -f "$base.exit" ] && [ ! -f "$base.delay" ]; then
+    for scope_dir in "$fixture/scopes/"*; do
+      candidate="$scope_dir/get/$addr"
+      if [ -f "$candidate.json" ] || [ -f "$candidate.exit" ] || [ -f "$candidate.delay" ]; then
+        base=$candidate
+        break
+      fi
+    done
+  fi
   # get/<addr>.delay: seconds to answer in, like a remote machine over a slow
   # link (the block gives up after 10 s, so a longer delay shows its timeout).
   if [ -f "$base.delay" ]; then

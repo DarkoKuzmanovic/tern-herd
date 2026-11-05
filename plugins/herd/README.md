@@ -29,11 +29,11 @@ t1n                   hermes   ● done            104 shop     │ Agent     co
 The block opens in Tern's sans face and follows Tern's page layout (Designing
 Views):
 
-- **Head row**: the title, `herdr-core · updated HH:MM:SS` (and `run <id>`
-  when the block was opened with a `run=<id>` argument), and three controls:
-  **Finished** (`h`, shows finished terminals with `hc ls --all`), **Mute**
-  (`m`, turns the toasts off) and **Refresh** (`r`). Subtree focus appears in
-  the head metadata as `focus <terminal>`. When `hc ls` fails after a list
+- **Head row**: the title, `herdr-core · updated HH:MM:SS` and the current
+  run label, with **Run…** (`u`), **Finished** (`h`), **Mute** (`m`) and
+  **Refresh** (`r`) controls. Run scopes switch in place; All terminals is
+  the unfiltered scope. Finished shows finished rows; Mute turns toasts off.
+  Subtree focus appears in the head metadata as `focus <terminal>`. When `hc ls` fails after a list
   has loaded, the meta says `stale, 40s old` in the warning tone and the last
   list stays on screen.
 - **Stats** (four tiles): facts about the run that the tabs don't already
@@ -183,6 +183,7 @@ block.
 | --- | --- |
 | ↑ ↓ / k j, Home End / g G, PgUp PgDn | move the selection |
 | 1 2 3 4, Tab ⇧Tab | filter: All, Needs you, Working, Done |
+| u | choose All terminals or a remembered/typed run label without reopening |
 | Enter / o (or double-click a row) | watch: `hc attach --observe --history 200 <t>` in a split to the right. Nothing you type reaches the agent and the terminal isn't resized |
 | a | attach: `hc attach <t>` in a split, to type into it |
 | l | logs: `hc read <t> --lines 40` once into a card; `l` again re-reads |
@@ -201,6 +202,27 @@ keeps running.
 
 The filter, focus, finished and mute settings and the selected terminal are
 saved, so a reload or restart keeps them.
+
+### Run scopes
+
+Press **u**, click **Run…**, or choose **Choose Herd run scope**
+(`plugin.herd.scope`) from any tab. Choose **All terminals**, one of the
+12 recent run labels, or **Enter run label…**. Opening the picker makes one
+`hc --json` request: unlike the reduced `hc ls --json` projection, the bare
+JSON command retains `Terminal.labels`, so live run labels can be discovered
+without per-row `get` polling. At most 12 distinct labels join the recent list.
+Labels found in cached selected-terminal details are remembered too.
+This is not a complete inventory: finished/removed runs and unreachable
+machines can be absent. If discovery fails, remembered and typed labels work.
+The current scope appears in the head, tab title and status segment.
+
+The block saves its scope; `run=<id>` is only the initial default. Scope
+switching clears list/detail caches, logs, subtree focus and pending mailbox
+requests. A confirmation already open keeps its original address and scope
+generation; confirming after a switch is refused rather than retargeted.
+Recent labels are capped at 12 and saved pane scopes at 32. Scope summary
+metadata belongs to its pane, so another console cannot overwrite its counts.
+
 
 ## Toasts
 
@@ -277,9 +299,9 @@ terminals that finish while `h` is off just leave the table.
   a fresh window VM identity cannot replay its predecessor's grant. A
   confirmed send or interrupt still returns through `cx.session:event`,
   and the host rechecks it against the latest list before running `hc`.
-- The status segment reads counts the host writes to `tern.kv` (`summary`:
-  working, blocked, errors; only when they change) on a 3-second window timer,
-  and shows only while a Herd block is open in the window.
+- The status segment reads the chosen Herd pane's scope-specific root summary
+  on a 3-second timer. The host also publishes per-live-pane counts to kv,
+  removing them when the pane retires; another scope never supplies its counts.
 - A pane id survives a block restart or plugin reload: the host keeps one
   state object per pane, retires the old one in `init` (cancelling its poll
   and debounce timers), and every timer or process callback checks it is still

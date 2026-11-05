@@ -1,0 +1,7 @@
+{
+  "hidden_finished": 2,
+  "machines": [],
+  "terminals": [
+    {"address":"t62","agent":"codex","cwd":"/home/alex/code/shop/.worktrees/checkout","name":"b2-checkout","state":"live","status":"blocked","turn":2,"where":"shop / checkout"}
+  ]
+}

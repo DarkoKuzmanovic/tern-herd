@@ -1,0 +1,6 @@
+{
+  "address":"t61", "argv":["codex","--no-daemon"], "created_ms":1793865673513,
+  "cwd":"/home/alex/code/shop/.worktrees/cart", "name":"b1-cart",
+  "labels":{"run":"cart"}, "state":"live", "status":{"app":"codex","state":"working"},
+  "turn":4, "title":"Cart totals"
+}
