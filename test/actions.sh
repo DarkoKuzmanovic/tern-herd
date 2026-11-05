@@ -15,6 +15,9 @@ for action in watch-unfocused doubleclick-unfocused; do run_case "$action"; done
 for action in arbitration abandoned reload expire; do
   SHOOT_NO_CONSUMER=1 run_case "$action"
 done
+for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing; do
+  run_case "$action"
+done
 for action in scope-fixtures scope-discovery scope-ui scope-open scope-reload scope-confirm-send scope-confirm-interrupt scope-confirm-finished scope-detail scope-summary; do
   run_case "$action" scopes
 done
@@ -35,4 +38,4 @@ if SHOOT_HOOK='"$T/bin/xdg-open" https://example.invalid' "$TEST/shoot.sh" activ
   echo 'actions: FAIL: executable opener escaped the guard' >&2
   exit 1
 fi
-echo 'actions: all action, scope, needs-you navigation, activity, arbitration, expiry, reload and opener-guard checks passed'
+echo 'actions: all action, viewer, scope, needs-you navigation, activity, arbitration, expiry, reload and opener-guard checks passed'

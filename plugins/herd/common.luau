@@ -55,6 +55,7 @@ export type WindowRequest = {
 	address: string,
 	label: string,
 	hc: string,
+	mode: ("read" | "write")?,
 	expires: number,
 	owner: string?,
 	generation: number?,

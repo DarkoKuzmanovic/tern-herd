@@ -4,6 +4,7 @@
 -- This half also owns the palette command, key and status segment.
 
 local common = require("./common")
+local viewers = require("./viewers")
 
 local KIND = common.KIND
 local ACTION = common.OPEN_ACTION
@@ -193,16 +194,86 @@ local function preview(text: string): string
 	return if #one > 80 then string.sub(one, 1, 79) .. "…" else one
 end
 
--- Opens `hc attach` on `address` in a split right of `beside`.
-local function attach(cx: WindowCx, beside: number, address: string, observe: boolean, binary: string)
+-- Writable Attach always creates a split. Only registered read-only viewers
+-- participate in Watch reuse and its float/dock/park controls.
+local function create_viewer(cx: WindowCx, beside: number, address: string, mode: viewers.Mode, binary: string): number?
 	local line = common.quote(binary) .. " attach "
-	if observe then
+	if mode == "read" then
 		line ..= "--observe --history 200 "
 	end
 	line ..= common.quote(address)
 	local pane = cx.layout:split(beside, "right", { command = line }, { focus = true })
 	if pane == nil then
 		cx:toast("error", "Could not open a split for " .. address, line)
+		return nil
+	end
+	local recorded, why = viewers.record(cx, beside, binary, address, mode, pane)
+	if not recorded then cx:toast("error", "Viewer opened but could not be remembered", why) end
+	return pane
+end
+
+local function use_viewer(cx: WindowCx, source: number, request: common.WindowRequest)
+	local verb, address, label = request.verb, request.address, request.label
+	local mode: viewers.Mode = if verb == "attach" then "write" else "read"
+	if request.mode ~= mode then
+		cx:toast("error", "Viewer mode does not match its action", label)
+		return
+	end
+	if mode == "write" then
+		create_viewer(cx, source, address, mode, request.hc)
+		return
+	end
+	local pane, why = viewers.find(cx, source, request.hc, address, "read")
+	if why then
+		cx:toast("error", "Could not find a Watch viewer", why)
+		return
+	end
+	if pane == nil then
+		if verb ~= "watch" and verb ~= "float" then
+			cx:toast("info", "No Watch viewer for " .. label, "Open Watch first.")
+			return
+		end
+		pane = create_viewer(cx, source, address, "read", request.hc)
+		if pane == nil or verb == "watch" then return end
+	end
+	local viewer = pane :: number
+	local info = cx.session:pane(viewer)
+	if info == nil then
+		cx:toast("error", "Watch viewer is no longer available", label)
+		return
+	end
+	if verb == "park" then
+		if info.parked then
+			cx:toast("info", "Watch viewer is already parked", label)
+			return
+		end
+		local ok, err = cx.layout:park(viewer)
+		if not ok then cx:toast("error", "Could not park Watch viewer", err) end
+		return
+	end
+	if info.parked then
+		-- Unpark deals beside the focused block: anchor it to the source
+		-- console's tab and host, not whichever pane this replica last used.
+		cx.layout:focus(source)
+		local ok, err = cx.layout:unpark(viewer, { focus = false })
+		if not ok then
+			cx:toast("error", "Could not unpark Watch viewer", err)
+			return
+		end
+		info = cx.session:pane(viewer)
+		if info == nil then
+			cx:toast("error", "Watch viewer is no longer available", label)
+			return
+		end
+	end
+	if verb == "float" and not info.floating then
+		local ok, err = cx.layout:float(viewer, source, "br", { focus = true })
+		if not ok then cx:toast("error", "Could not float Watch viewer", err) end
+	elseif verb == "dock" and info.floating then
+		local ok, err = cx.layout:dock(viewer, source, "right", { focus = true })
+		if not ok then cx:toast("error", "Could not dock Watch viewer", err) end
+	else
+		cx.layout:focus(viewer)
 	end
 end
 
@@ -267,8 +338,8 @@ end
 
 local function dispatch(cx: WindowCx, pane: number, request: common.WindowRequest)
 	local verb, address, name = request.verb, request.address, request.label
-	if verb == "watch" or verb == "attach" then
-		attach(cx, pane, address, verb == "watch", request.hc)
+	if verb == "watch" or verb == "attach" or verb == "float" or verb == "dock" or verb == "park" then
+		use_viewer(cx, pane, request)
 	elseif verb == "send" then
 		ask_send(cx, pane, address, name, request.generation)
 	elseif verb == "interrupt" then
@@ -337,6 +408,8 @@ local function poll_requests(cx: WindowCx?)
 end
 
 local function wake_requests(_ev: any, cx: WindowCx)
+	local _, why = viewers.prune(cx)
+	if why then cx:toast("error", "Could not update Watch viewers", why) end
 	if request_timer then request_timer:cancel(); request_timer = nil end
 	poll_requests(cx)
 end
@@ -347,7 +420,11 @@ end
 tern.on("pane_created", wake_requests)
 tern.on("focus", wake_requests)
 tern.on("tab_created", wake_requests)
-tern.on("pane_closed", wake_requests)
+tern.on("pane_closed", function(ev: PaneEvent, cx: WindowCx)
+	local _, why = viewers.forget(cx, ev.pane)
+	if why then cx:toast("error", "Could not forget a closed viewer", why) end
+	wake_requests(ev, cx)
+end)
 tern.on("tab_closed", wake_requests)
 tern.on("session_ended", wake_requests)
 request_timer = tern.timer(0, poll_requests)

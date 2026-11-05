@@ -249,7 +249,7 @@ shoot_one() {
     # A second independent window VM consumes the same mirrored surface.
     # It uses the production consumer unchanged, including host arbitration.
     mkdir -p "$T/crates/plugins/fixtures/contender"
-    cp "$T/crates/plugins/fixtures/herd/"{window,common}.luau "$T/crates/plugins/fixtures/contender/"
+    cp "$T/crates/plugins/fixtures/herd/"*.luau "$T/crates/plugins/fixtures/contender/"
     printf '%s\n' 'schema = 1' 'id = "herd-contender"' 'name = "Test contender"' \
       'version = "0.0.0"' 'window = "window.luau"' >"$T/crates/plugins/fixtures/contender/plugin.toml"
   fi

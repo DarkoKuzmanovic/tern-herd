@@ -6,9 +6,9 @@
 -- (below it in a narrow pane), refreshed every two seconds.
 --
 -- Keys: ↑/↓ (or k/j) move, Home/End jump, 1–4 or Tab/⇧Tab pick a filter,
--- Enter (or o) watches the terminal in a split (`hc attach --observe`),
--- a attaches to type into it, l reads its last 40 lines once, s sends a
--- prompt, x interrupts, w opens its worktree in a git block, f focuses the
+-- Enter (or o) focuses/opens a read-only Watch viewer; p floats, d docks,
+-- z parks that viewer. a opens a separate writable Attach; l reads logs,
+-- s sends a prompt, x interrupts, w opens its worktree in a git block, f focuses the
 -- selected terminal's subtree, h shows finished terminals,
 -- m mutes the toasts, r refreshes now, [/] select previous/next needs-you,
 -- v opens the activity inbox; Esc closes the inbox, logs, then the focus.
@@ -76,10 +76,10 @@ local KV_GAP_CH = 2
 local ROW_LINES = 4 / 3
 -- The list never shrinks below the toolbar, the header and this many rows.
 local MIN_TABLE_ROWS = 4
--- The card's lines outside its facts: head row, three action rows with their
+-- The card's lines outside its facts: head row, four action rows with their
 -- gaps, and the body's padding. Beside the table the card's height (with a
 -- little slack) bounds the row the two share.
-local CARD_FIXED_H = 8
+local CARD_FIXED_H = 10
 local MIN_LOG_LINES = 6
 
 local FILTERS = { "all", "needs", "working", "done" }
@@ -1780,6 +1780,11 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 				button("Worktree", "worktree", { size = "sm", keys = { "w" }, disabled = why_not_tree }),
 				button("Focus", "focus", { size = "sm", keys = { "f" }, on = state.subtree == term.address }),
 			}),
+			ui.node("row", { key = "viewer", gap = "sm", wrap = true }, {
+				button("Float Watch", "float", { size = "sm", keys = { "p" }, title = "Float the read-only viewer; open one if needed" }),
+				button("Dock Watch", "dock", { size = "sm", keys = { "d" }, title = "Dock the existing read-only viewer" }),
+				button("Park Watch", "park", { size = "sm", keys = { "z" }, title = "Hide the read-only viewer without stopping its terminal" }),
+			}),
 		}),
 		ui.node("row", { key = "danger", gap = "sm", justify = "end" }, {
 			button("Interrupt…", "interrupt", {
@@ -2010,6 +2015,8 @@ local function enqueue_window(state: State, verb: string, address: string, label
 		id = tostring(tern.now()) .. ":" .. request_serial,
 		verb = verb, address = address, label = label,
 		hc = hc_path or "hc", expires = tern.now() + 5000,
+		mode = if verb == "attach" then "write"
+			elseif verb == "watch" or verb == "float" or verb == "dock" or verb == "park" then "read" else nil,
 		generation = state.scope_epoch,
 		scopes = if verb == "scope" then recent_scopes() else nil,
 	}
@@ -2146,7 +2153,8 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 		toggle_finished(state)
 	elseif act_name == "mute" then
 		toggle_mute(state)
-	elseif act_name == "watch" or act_name == "attach" or act_name == "send" or act_name == "interrupt" or act_name == "worktree" then
+	elseif act_name == "watch" or act_name == "attach" or act_name == "float" or act_name == "dock" or act_name == "park"
+		or act_name == "send" or act_name == "interrupt" or act_name == "worktree" then
 		ask_window(state, cx, act_name)
 	elseif act_name == "logs" then
 		read_logs(state)
@@ -2397,6 +2405,12 @@ tern.block.define("herd", {
 			ask_window(state, cx, "watch")
 		elseif k == "a" then
 			ask_window(state, cx, "attach")
+		elseif k == "p" then
+			ask_window(state, cx, "float")
+		elseif k == "d" then
+			ask_window(state, cx, "dock")
+		elseif k == "z" then
+			ask_window(state, cx, "park")
 		elseif k == "l" then
 			read_logs(state)
 		elseif k == "s" then

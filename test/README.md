@@ -5,7 +5,7 @@ throwaway `tern serve` and writes PNGs to `test/shots/`. It is the way to look
 at the plugin's UI without a live herd, a live Tern window or a real
 herdr-core, and the way to diff a redesign against the same fixtures.
 
-Needs: `bash`, `jq`, `tern` on `PATH` (0.9.11 or newer; `TERN=/path/to/tern`
+Needs: `bash`, `jq`, `tern` on `PATH` (0.9.12 or newer; `TERN=/path/to/tern`
 overrides), and a `hc`-shaped fixture — the real herdr-core is never started.
 
 ## Run
@@ -19,7 +19,7 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
 ./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
-./test/actions.sh                                      # actions, scopes, needs-you, activity, arbitration and opener guard
+./test/actions.sh                                      # actions, viewer lifecycle/layout, scopes, needs-you, activity and opener guard
 ```
 
 | option | meaning |
@@ -283,6 +283,53 @@ It also checks acknowledgement clearing, first-claim
 arbitration, refusal of another owner's acknowledgement, reload discarding
 in-flight state, and a 5-second dock notice for missing/abandoned consumers.
 Every normal run must pass the native/PATH opener guard.
+
+Viewer cases use the `activation` fixture and the actual production mailbox,
+pane-id registry and native layout APIs:
+
+- `viewer-reuse`: repeated native Enter/name-cell double-click focuses the
+  same read-only pane with exactly one `hc attach --observe --history 200`.
+  Two writable Attach requests create separate panes; a later Watch still
+  chooses the original read-only pane, not either writable attach.
+- `viewer-reload`: reloading fixture plugins preserves the actual read-only
+  pane identity and bounded persisted registry; Watch does not attach again.
+- `viewer-closed`: a genuinely closed viewer is replaced exactly once, and
+  subsequent Watch reuses its replacement.
+- `viewer-replaced`: an unrelated `/bin/cat` terminal sets a matching OSC
+  title, but is never adopted as a viewer. A native document replaces the
+  real viewer's presentation; the test explicitly closes any old terminal
+  retained in the deck before requiring a new Watch. The native file pane
+  and its path remain untouched.
+- `viewer-layout`: native `p` creates/floats a missing read-only viewer;
+  `d` docks it and `z` parks it. The test asserts real
+  `PaneInfo.floating`/`parked`/`tab` flags and that the pane has not exited.
+  Watch unparks/reuses it. The Float/Dock/Park host controls exercise the
+  same production path without another fake attach.
+- `viewer-missing`: Dock must show the explicit no-Watch notice rather than
+  moving a writable Attach pane. Park must acknowledge without moving it,
+  adding panes or attaching again; an identical native toast may be deduped.
+  A later Watch opens separately.
+
+These cases never mock registry lookups, claims, acknowledgements or layout
+results. Native keys are sent only after refocusing the console; the fake
+viewer processes remain harmless. Fake-hc logs must contain only the expected
+read-only/writable attaches, never send, interrupt, keys, kill or removal.
+All viewer waits use ordinary native timers: the cold-scope-only adapter is
+not enabled or broadened. Existing opener guards remain mandatory.
+
+Run just the viewer cases:
+
+```sh
+for action in viewer-reuse viewer-reload viewer-closed viewer-replaced viewer-layout viewer-missing; do
+  ACTION_CASE=$action SHOOT_SCOPE_OPEN_DRAIN=0 \
+    SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh activation
+done
+```
+
+The competing-consumer setup copies every production Luau dependency into its
+independent window-only fixture plugin, including `viewers.luau`; the manifest
+does not activate a second host half.
+
 
 Run-scope cases use the fictional `scopes` fixture to assert the rows actually
 change, not just the title or outgoing `--label` argument. They cover the `u`

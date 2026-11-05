@@ -19,6 +19,15 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
   even while finished terminal rows are hidden.
 - Public static Luau type-check CI with pinned, checksum-verified analyzer and
   Tern declarations; local `test/typecheck.sh` checks both plugin halves.
+- Watch reuses its read-only viewer across repeated opens and plugin reloads;
+  explicit Float Watch (`p`), Dock Watch (`d`) and Park Watch (`z`) controls
+  arrange that view without stopping its hc terminal. Writable Attach remains
+  a separate new split.
+
+### Changed
+
+- Minimum Tern version is now 0.9.12, whose native host identity and viewer
+  layout APIs are verified for viewer reuse and float/dock/park.
 
 ## [0.2.2] - 2026-11-05
 

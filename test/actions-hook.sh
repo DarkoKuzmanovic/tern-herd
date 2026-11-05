@@ -188,6 +188,56 @@ activity_metadata() {
   check_lua "${activity_root}local ids = {}; local last = math.huge; for _, e in root.p.herd_activity do assert(type(e.id) == 'number' and not ids[e.id]); ids[e.id] = true; assert(type(e.at) == 'number' and e.at > 1000000000 and e.at <= last); last = e.at; assert(type(e.address) == 'string' and type(e.status) == 'string' and type(e.read) == 'boolean' and type(e.runs) == 'table'); for key in e do assert(table.find({'id','at','address','name','from','status','exit_code','runs','read'},key), 'non-metadata activity field: ' .. key) end end"
 }
 
+# Viewer tests always send native keys to the console, never to a viewer's
+# harmless fake attach. They observe real panes/flags and the real mailbox;
+# no registry result, grant, acknowledgement or layout response is mocked.
+viewer_root='local root = cx.session:surface(viewer_source,{root="main",depth=0,nodes=1}).main; '
+viewer_initialize() {
+  check_lua "${probe}viewer_source = p; assert(root.p.herd_cursor == 't44' and #q == 0)"
+}
+viewer_press() {
+  check_lua "cx.layout:focus(viewer_source)"
+  ctl key "$1" >/dev/null
+}
+viewer_event() {
+  local verb_json
+  verb_json=$(jq -Rn --arg verb "$1" '$verb')
+  check_lua "cx.layout:focus(viewer_source); cx.session:event(viewer_source,{ev='action',id='main',act=$verb_json})"
+}
+viewer_new() {
+  local key=$1 variable=$2
+  check_lua "viewer_before = {}; viewer_before_count = 0; for _, pane in cx.session:panes() do viewer_before[pane.pane] = true; viewer_before_count += 1 end; cx.layout:focus(viewer_source)"
+  ctl key "$key" >/dev/null
+  wait_lua "${viewer_root}assert(#root.p.herd_requests == 0); local panes = cx.session:panes(); assert(#panes == viewer_before_count + 1); local created; for _, pane in panes do if not viewer_before[pane.pane] then assert(created == nil); created = pane end end; assert(created and (created.kind == 'terminal' or created.kind == 'agent') and created.exited == nil); $variable = created.pane"
+}
+viewer_reuse() {
+  local key=${1:-Enter}
+  check_lua "viewer_reuse_count = #cx.session:panes(); cx.layout:focus(viewer_source)"
+  if [ "$key" = doubleclick ]; then
+    ctl dblclick '.sf-tbl-row.sel>.sf-tbl-c>.sf-t-strong' >/dev/null
+  else
+    ctl key "$key" >/dev/null
+  fi
+  wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and cx.session:focused() == viewer_read); assert(#cx.session:panes() == viewer_reuse_count); local pane = cx.session:pane(viewer_read); assert(pane and not pane.parked and pane.exited == nil)"
+}
+viewer_counts() {
+  local reads=$1 writes=$2 observed_reads observed_writes
+  for _ in {1..30}; do
+    pump
+    observed_reads=$(grep -c '^attach --observe --history 200 t44$' "$T/state/actions.log" 2>/dev/null || true)
+    observed_writes=$(grep -c '^attach t44$' "$T/state/actions.log" 2>/dev/null || true)
+    if [ "${observed_reads:-0}" -eq "$reads" ] && [ "${observed_writes:-0}" -eq "$writes" ]; then
+      if [ -s "$T/state/actions.log" ] && grep -vE '^(attach --observe --history 200 t44|attach t44)$' "$T/state/actions.log"; then
+        echo 'viewer layout action sent input or stopped a terminal' >&2
+        return 1
+      fi
+      return 0
+    fi
+  done
+  echo "viewer fake-attach counts did not settle: read ${observed_reads:-0}/$reads, write ${observed_writes:-0}/$writes" >&2
+  return 1
+}
+
 case "$ACTION_CASE" in
   watch|doubleclick|attach|watch-unfocused|doubleclick-unfocused)
     before=$(ctl state | jq '[.tabs[].panes] | add')
@@ -222,6 +272,110 @@ case "$ACTION_CASE" in
     [ "$(grep -cE "$pattern" "$T/state/actions.log")" -eq 1 ]
     check_lua "${probe}assert(#q == 0, 'ack did not clear request')"
     echo "$ACTION_CASE: one split, one fake attach; visible in ${elapsed}ms wall / ${elapsed_app}ms app time"
+    ;;
+  viewer-reuse)
+    viewer_initialize
+    viewer_new Enter viewer_read
+    viewer_counts 1 0
+    viewer_reuse
+    viewer_reuse doubleclick
+    viewer_counts 1 0
+    # Attach is deliberately always writable and new, never a read-only reuse.
+    viewer_new a viewer_write
+    viewer_new a viewer_write_second
+    wait_lua "assert(viewer_read ~= viewer_write and viewer_read ~= viewer_write_second and viewer_write ~= viewer_write_second); assert(cx.session:pane(viewer_read) and cx.session:pane(viewer_write) and cx.session:pane(viewer_write_second))"
+    viewer_reuse
+    viewer_counts 1 2
+    echo 'viewer reuse: Enter/double-click focus one read-only pane; two writable Attach requests stay distinct; Watch never reuses writable Attach'
+    ;;
+  viewer-reload)
+    viewer_initialize
+    viewer_new Enter viewer_read
+    viewer_counts 1 0
+    ctl plugins fixtures >/dev/null
+    wait_cursor t44 viewer_source
+    viewer_reuse
+    viewer_counts 1 0
+    kv=${KVFILE:?shoot.sh must provide its validated private kv path}
+    case "$kv" in "$T"/*) ;; *) echo 'viewer registry path escaped private run' >&2; exit 1 ;; esac
+    jq -e '.viewer_registry.records | length > 0 and length <= 64' "$kv" >/dev/null
+    echo 'viewer reload: real pane-id registry persists and Watch focuses the same live read-only pane without another attach'
+    ;;
+  viewer-closed)
+    viewer_initialize
+    viewer_new Enter viewer_read
+    viewer_counts 1 0
+    check_lua "viewer_closed = viewer_read; cx.layout:focus(viewer_source); cx.layout:close(viewer_closed)"
+    wait_lua "assert(cx.session:pane(viewer_closed) == nil)"
+    viewer_new Enter viewer_read
+    wait_lua "assert(viewer_read ~= viewer_closed)"
+    viewer_counts 2 0
+    viewer_reuse
+    viewer_counts 2 0
+    echo 'viewer closed: closed pane is replaced exactly once, then reused; no terminal input or stop action'
+    ;;
+  viewer-replaced)
+    viewer_initialize
+    # An unregistered real terminal with a matching OSC title must not be
+    # discovered by title heuristics and adopted as an hc Watch viewer.
+    check_lua "viewer_decoy = cx.layout:new_tab({command=[=[printf '\\033]0;spam-192 t44\\007'; exec /bin/cat]=]}); assert(viewer_decoy)"
+    wait_lua "local pane = cx.session:pane(viewer_decoy); assert(pane and string.find(pane.title,'spam-192 t44',1,true))"
+    viewer_new Enter viewer_read
+    viewer_counts 1 0
+    wait_lua "assert(viewer_read ~= viewer_decoy and cx.session:pane(viewer_decoy))"
+    document_json=$(jq -Rn --arg path "$T/crates/plugins/fixtures/herd/README.md" '$path')
+    check_lua "viewer_replaced = viewer_read; cx.layout:focus(viewer_replaced); viewer_document = cx.docs:open($document_json,{how='replace'}); assert(cx.session:pane(viewer_document).kind == 'file')"
+    # Native document replacement may retain the old terminal in the deck.
+    # That is still a valid Watch viewer, so explicitly close it before
+    # asserting replacement rather than demanding an unnecessary new split.
+    check_lua "if viewer_replaced ~= viewer_document and cx.session:pane(viewer_replaced) then cx.layout:close(viewer_replaced) end"
+    wait_lua "local old = cx.session:pane(viewer_replaced); assert(old == nil or (viewer_replaced == viewer_document and old.kind == 'file'))"
+    viewer_new Enter viewer_read
+    wait_lua "assert(viewer_read ~= viewer_document); local document = cx.session:pane(viewer_document); assert(document.kind == 'file' and document.path == $document_json)"
+    viewer_counts 2 0
+    viewer_reuse
+    viewer_counts 2 0
+    echo 'viewer identity: matching-title decoy ignored; a native file replacing the viewer is never reused as Watch'
+    ;;
+  viewer-missing)
+    viewer_initialize
+    viewer_new a viewer_write
+    viewer_counts 0 1
+    viewer_press d
+    wait_text 'No Watch viewer for spam-192'
+    wait_lua "${viewer_root}assert(#root.p.herd_requests == 0); local pane = cx.session:pane(viewer_write); assert(pane and not pane.floating and not pane.parked and pane.exited == nil)"
+    viewer_counts 0 1
+    check_lua "viewer_missing_count = #cx.session:panes()"
+    viewer_press z
+    wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and #cx.session:panes() == viewer_missing_count); local pane = cx.session:pane(viewer_write); assert(pane and not pane.floating and not pane.parked and pane.exited == nil)"
+    viewer_counts 0 1
+    viewer_new Enter viewer_read
+    wait_lua "assert(viewer_read ~= viewer_write)"
+    viewer_counts 1 1
+    echo 'viewer missing: Dock/Park report no Watch instead of repurposing writable Attach; a subsequent Watch opens separately'
+    ;;
+  viewer-layout)
+    viewer_initialize
+    # Float may create the read-only viewer, but all later layout actions must
+    # reuse that actual pane and keep its fake attach process alive.
+    viewer_new p viewer_read
+    wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and pane.floating and not pane.parked)"
+    viewer_counts 1 0
+    viewer_press d
+    wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and not pane.floating and not pane.parked and pane.tab)"
+    viewer_press z
+    wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and pane.parked and pane.tab == nil and pane.exited == nil)"
+    viewer_reuse
+    viewer_counts 1 0
+    viewer_event float
+    wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and cx.session:pane(viewer_read).floating)"
+    viewer_event dock
+    wait_lua "${viewer_root}local pane = cx.session:pane(viewer_read); assert(#root.p.herd_requests == 0 and not pane.floating and not pane.parked)"
+    viewer_event park
+    wait_lua "${viewer_root}assert(#root.p.herd_requests == 0 and cx.session:pane(viewer_read).parked)"
+    viewer_reuse
+    viewer_counts 1 0
+    echo 'viewer layout: native p/d/z and production Float/Dock/Park controls change real pane flags; Watch unparks the same running pane with one attach'
     ;;
   send)
     ctl key s >/dev/null

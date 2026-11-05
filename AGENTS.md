@@ -16,6 +16,7 @@ stop an agent.
 | `plugins/herd/window.luau` | Palette commands, key bindings, mailbox actions, splits, dialogs, status segment |
 | `plugins/herd/common.luau` | Shared constants, the single `M.HC` candidate list, quoting and links |
 | `plugins/herd/activity.luau` | Shared capped metadata ledger, transition deduplication and read state |
+| `plugins/herd/viewers.luau` | Bounded pane-id registry for read-only/writable viewers and verified host/session ownership |
 | `plugins/herd/herd.css` | Scoped responsive layout |
 | `plugins/herd/README.md` | Full behavior and limits |
 | `test/shoot.sh`, `test/bin/hc` | Isolated headless screenshot runner and fake command |

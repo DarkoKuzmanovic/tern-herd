@@ -4,6 +4,9 @@ A Tern plugin that shows herdr-core's terminals (`hc ls --json --all`) in a bloc
 a herd run (a lead agent and its builders in git worktrees) can be watched and
 steered from Tern without typing `hc` commands.
 
+Requires **Tern 0.9.12 or later** and herdr-core **0.1.18 or later**. Linux is
+tested; macOS is untested.
+
 ```
 Herd   herdr-core · updated 22:42:24                     [Finished h] [Mute m] [Refresh r]
 
@@ -96,9 +99,9 @@ Views):
   `fetching…`; after a failure they say what is missing and hc's error shows
   under them. Its buttons come in fixed
   groups: **Attach**, **Logs**, **Send…** (what reaches the terminal), then
-  **Worktree** and **Focus** (where to look), then **Interrupt…** alone at
-  the end of its own row. A button that can't apply is disabled with the
-  reason.
+  **Worktree** and **Focus** (where to look), **Float Watch**, **Dock Watch**
+  and **Park Watch** (read-only viewer layout), then **Interrupt…** alone at
+  the end of its own row. A button that can't apply is disabled with the reason.
 - **Logs card**: `l` reads the last 40 lines once (`hc read <t> --lines 40`)
   into a card under the view, in a box half the pane tall that opens at the
   newest line and scrolls up. `l` again reads again; nothing polls it.
@@ -195,8 +198,11 @@ focuses the block.
 | ] / [ | select next / previous blocked or errored terminal in the current run scope |
 | 1 2 3 4, Tab ⇧Tab | filter: All, Needs you, Working, Done |
 | u | choose All terminals or a remembered/typed run label without reopening |
-| Enter / o (or double-click a row) | watch: `hc attach --observe --history 200 <t>` in a split to the right. Nothing you type reaches the agent and the terminal isn't resized |
-| a | attach: `hc attach <t>` in a split, to type into it |
+| Enter / o (or double-click a row) | focus the existing read-only Watch viewer, or open `hc attach --observe --history 200 <t>` to the right; unpark it if hidden. Nothing you type reaches the agent and the terminal isn't resized |
+| a | attach: always open a new writable `hc attach <t>` split, to type into it |
+| p | float the selected terminal's read-only Watch viewer as a peek/PiP; open one if absent |
+| d | dock the selected terminal's existing Watch viewer; no viewer means an explicit notice |
+| z | park the selected terminal's existing Watch viewer without stopping its program |
 | l | logs: `hc read <t> --lines 40` once into a card; `l` again re-reads |
 | s | send: asks for a prompt, asks again to confirm, then runs `hc send <t> <text>` (never `--force`) |
 | x | interrupt: asks to confirm, then runs `hc interrupt <t>`. Refused for done, idle and finished terminals, and checked again after you confirm |
@@ -214,6 +220,21 @@ keeps running.
 
 The filter, focus, finished and mute settings and the selected terminal are
 saved, so a reload or restart keeps them.
+
+### Watch viewers
+
+Watch reuses only viewers created by Herd with the same window, source Tern
+host/session, resolved `hc` executable, terminal address and read-only mode.
+It never guesses from a title or changing foreground command, and never reuses
+a writable Attach for Watch. **Float Watch**, **Dock Watch** and **Park Watch**
+also target only that registered read-only viewer. Dock/park do not create a
+missing viewer. A parked viewer is unparked before Watch/float/dock use it.
+Closing a viewer removes its registry entry; the next Watch creates a new one.
+The bounded registry survives plugin reloads (up to 64 records); stale, exited,
+native or moved-to-another-host/session panes are pruned. Unknown or ambiguous
+ownership is refused, not guessed. Layout controls only affect Tern's disposable
+view: no stop, send or interrupt reaches the hc terminal.
+
 
 ### Next / previous needs-you
 

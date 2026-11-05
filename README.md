@@ -15,7 +15,7 @@ Watch and steer [herdr-core](https://herdr.dev) terminals and coding agents from
 - Next/previous needs-you navigation from any tab, with console focus and no automatic attach.
 - An Activity inbox with shared unread badges, observed transition history and scope-aware Mark read/Clear.
 - A selected-terminal card with model, status age, parent, worktree and exit details; logs on demand.
-- Read-only watch splits, full attach splits, and confirmed send/interrupt actions.
+- Reused read-only Watch viewers, explicit float/dock/park controls, separate writable Attach, and confirmed send/interrupt actions.
 - Transition toasts, a mute switch and status-line counts of working, blocked, errored and unread activity.
 - Responsive narrow layouts, remote-machine warnings and the last good list when `hc` stops answering.
 
@@ -40,7 +40,7 @@ These show made-up data from the isolated test harness, never a real work sessio
 
 ## Requirements
 
-- **Tern 0.9.11 or later (tested on 0.9.11 and 0.9.12)**. Tern is closed beta and requires a Stencil account.
+- **Tern 0.9.12 or later (tested on 0.9.12)**. Tern is closed beta and requires a Stencil account.
 - **herdr-core `hc` 0.1.18 or later**, available from [herdr.dev](https://herdr.dev). The Herdr desktop app is not required.
 - Linux is tested. **macOS is untested**; use ⌘⌥⇧H to open and ⌘⌥⇧J / ⌘⌥⇧U for next / previous needs-you.
 - For development and screenshots: Bash, Git, `jq`, standard GNU command-line tools and a working Tern graphics environment. `shellcheck` is optional.
@@ -74,7 +74,7 @@ Choose **Open herd console** from Tern's palette, press **Ctrl+Alt+Shift+H**, or
 tern ctl plugins run plugin.herd.open
 ```
 
-It focuses an existing Herd block in the current session or opens one beside the current pane. Agents remain owned by herdr-core: closing a viewer does not stop them. Watch is read-only; Attach lets you type and resize the terminal.
+It focuses an existing Herd block in the current session or opens one beside the current pane. Agents remain owned by herdr-core: closing or parking a viewer does not stop them. Watch focuses its existing read-only viewer, unparking it if needed; Attach always opens a separate writable split.
 
 Choose **Next Herd terminal that needs you** / **Previous Herd terminal that needs you**
 in the palette, or press **Ctrl+Alt+Shift+J** / **Ctrl+Alt+Shift+U** from any tab.
@@ -89,8 +89,9 @@ one wins, then the most recently focused/used, then the lowest pane id.
 | ] / [ | Select next / previous blocked or errored terminal in this scope |
 | 1–4, Tab / Shift+Tab | All / Needs you / Working / Done |
 | u | Choose All terminals or a remembered/typed run label |
-| Enter / o, double-click | Watch in a read-only split |
-| a | Attach in a writable split |
+| Enter / o, double-click | Focus/open the selected terminal's read-only Watch viewer |
+| a | Open a new writable Attach split, never reused for Watch |
+| p / d / z | Float (open if needed) / dock / park the read-only Watch viewer |
 | l | Read the last 40 lines into a logs card |
 | s | Send text after a prompt and confirmation; never forces past a prompt |
 | x | Confirm an interrupt, only for working or blocked terminals |
@@ -181,6 +182,7 @@ The harness copies the plugin, pins a fake `hc`, isolates Tern's config/state/da
 | `plugins/herd/common.luau` | Shared constants, executable candidates and link helpers |
 | `plugins/herd/activity.luau` | Shared bounded activity metadata, transition baselines and unread state |
 | `plugins/herd/herd.css` | Scoped responsive layout |
+| `plugins/herd/viewers.luau` | Bounded viewer registry with explicit read/write, host/session and pane identity |
 | `test/` | Type-check script, isolated screenshot harness, fake `hc` and fictional fixtures |
 | `docs/screenshots/` | Reviewed, metadata-stripped README screenshots |
 
