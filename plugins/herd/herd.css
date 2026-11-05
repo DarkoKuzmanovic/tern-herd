@@ -1,0 +1,29 @@
+/* A region root is not a col. Give its real child a definite window-sized
+   flex box; native flex then measures chrome/cards before sizing the list. */
+.sf-main[data-role='herd.console'] > .sf-col[data-role='herd.page'] {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+}
+
+/* Four equal tiles stay on one line at the real container width. Remove
+   the stock 14ch minimum, which otherwise yields an accidental 3+1 wrap. */
+.sf-main[data-role='herd.console'] .sf-stats[data-role='herd.stats'] {
+  flex-wrap: nowrap;
+  width: 100%;
+  margin-left: 0;
+  clip-path: none;
+}
+.sf-main[data-role='herd.console'] .sf-stats[data-role='herd.stats'] > .sf-stat {
+  box-sizing: border-box;
+  flex: 1 1 25%;
+  min-width: 0;
+  max-width: none;
+  padding-right: 12px;
+}
+/* The stock leading clip hid this inset and border. Without it, align the
+   first tile's box and text with the head instead of shifting the strip. */
+.sf-main[data-role='herd.console'] .sf-stats[data-role='herd.stats'] > .sf-stat:first-child {
+  border-left: 0;
+  padding-left: 0;
+}

@@ -1,0 +1,17 @@
+> Read .scratch/brief.md in this worktree and do the task it describes.
+
+• Read .scratch/brief.md
+• Ran git status --short
+  └  M app/cart/totals.js
+     M app/static/app.js
+
+> Now the 390px layout: the totals row keeps its sticky footer while the
+  line-item list scrolls behind it. Re-running the browser gate with
+  npx playwright test --project=chromium tests/browser/layout-lint.
+
+• Ran pytest tests/cart/test_totals_layout.py --run-db -q
+  └ ..........                                                   [100%]
+     4 passed (18.7s)
+
+  Both light and dark shots are in .scratch/shots/390-. The footer no
+  longer overlaps the list. Next: the fast lane, then the report.

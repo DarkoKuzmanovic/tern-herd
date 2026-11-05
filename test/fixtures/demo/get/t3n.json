@@ -1,0 +1,69 @@
+{
+  "address": "t3n",
+  "argv": [
+    "codex",
+    "-a",
+    "never",
+    "-s",
+    "workspace-write",
+    "-m",
+    "gpt-6-astra",
+    "-c",
+    "sandbox_workspace_write.network_access=true",
+    "-c",
+    "sandbox_workspace_write.writable_roots=[\"/home/alex/.cache/uv\",\"/home/alex/.cache/ms-playwright\",\"/home/alex/.npm\"]",
+    "Read .scratch/brief.md in this worktree and do the task it describes. End with the final report it asks for."
+  ],
+  "cols": 200,
+  "created_ms": 1793825369952,
+  "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+  "die_with_parent": false,
+  "exit_code": null,
+  "finished_ms": null,
+  "foreground": {
+    "argv": [
+      "codex",
+      "-a",
+      "never",
+      "-s",
+      "workspace-write",
+      "-m",
+      "gpt-6-astra",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-c",
+      "sandbox_workspace_write.writable_roots=[\"/home/alex/.cache/uv\",\"/home/alex/.cache/ms-playwright\",\"/home/alex/.npm\"]",
+      "Read .scratch/brief.md in this worktree and do the task it describes. End with the final report it asks for."
+    ],
+    "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+    "name": "codex",
+    "pid": 83306
+  },
+  "identity": "ghostty",
+  "keep": false,
+  "labels": {
+    "herdr.seen": "1",
+    "run": "herd-0412",
+    "branch": "cart-totals",
+    "where": "shop / 1"
+  },
+  "name": "b1-cart",
+  "notify": true,
+  "parent": "t1n",
+  "pid": 83306,
+  "reason": null,
+  "reported": true,
+  "rm": false,
+  "rows": 120,
+  "screen": "exact",
+  "signal": null,
+  "state": "live",
+  "status": {
+    "app": "codex",
+    "state": "working"
+  },
+  "status_ms": 1793828464897,
+  "template": null,
+  "title": "⠹ Complete brief task | cart-totals",
+  "turn": 1
+}

@@ -1,0 +1,1 @@
+{"error":{"kind":"not_found","message":"no server listening at /run/user/1000/herdr-core/herdr.sock","hint":"start herdr-core, or `hc server status` says why"}}

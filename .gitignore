@@ -1,0 +1,25 @@
+# Generated screenshots, logs and machine-specific evidence
+test/shots/
+*.log
+*.log.*
+
+# Local worktrees and temporary files
+.worktrees/
+*.tmp
+*.swp
+*.swo
+*~
+
+# Credentials and local configuration
+.env
+.env.*
+*.jks
+*.keystore
+local.properties
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/

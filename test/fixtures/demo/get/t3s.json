@@ -1,0 +1,54 @@
+{
+  "address": "t3s",
+  "argv": [
+    "codex",
+    "-a",
+    "never",
+    "-s",
+    "workspace-write",
+    "-m",
+    "gpt-6.1-terra",
+    "-c",
+    "sandbox_workspace_write.network_access=true",
+    "Read .scratch/brief.md in this worktree and do the task it describes. End with the final report it asks for."
+  ],
+  "cols": 200,
+  "created_ms": 1793825411228,
+  "cwd": "/home/alex/code/shop/.worktrees/settings-page",
+  "die_with_parent": false,
+  "exit_code": null,
+  "finished_ms": null,
+  "foreground": {
+    "argv": ["codex", "-a", "never", "-s", "workspace-write", "-m", "gpt-6.1-terra"],
+    "cwd": "/home/alex/code/shop/.worktrees/settings-page",
+    "name": "codex",
+    "pid": 83412
+  },
+  "identity": "ghostty",
+  "keep": false,
+  "labels": {
+    "herdr.seen": "2",
+    "run": "herd-0412",
+    "branch": "settings-page",
+    "where": "shop / 1"
+  },
+  "name": "b5-settings",
+  "notify": true,
+  "parent": "t1n",
+  "pid": 83412,
+  "reason": null,
+  "reported": true,
+  "rm": false,
+  "rows": 120,
+  "screen": "exact",
+  "signal": null,
+  "state": "live",
+  "status": {
+    "app": "codex",
+    "state": "blocked"
+  },
+  "status_ms": 1793828468001,
+  "template": null,
+  "title": "⚠ waiting for approval | settings-page",
+  "turn": 1
+}

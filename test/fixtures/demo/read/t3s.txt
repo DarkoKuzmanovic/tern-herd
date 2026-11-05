@@ -1,0 +1,5 @@
+[1m⏵[0m hc from="t3s b5-settings": Codex needs approval to run
+  [36mnpm run -s css:release[0m in this worktree.
+
+[33m![0m Waiting for approval. Reply [1my[0m to allow, or give another command.
+  Nothing else has changed; the settings form markup is ready to restyle.

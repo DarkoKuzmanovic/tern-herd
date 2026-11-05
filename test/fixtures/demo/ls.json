@@ -1,0 +1,118 @@
+{
+  "hidden_finished": 21,
+  "machines": [
+    {
+      "name": "build-box",
+      "since_ms": 1793823416687,
+      "state": "unreachable",
+      "why": "cannot reach build-box: ssh: connect to host build-box port 22: Connection timed out"
+    }
+  ],
+  "terminals": [
+    {
+      "address": "t1n",
+      "agent": "hermes",
+      "cwd": "/home/alex/code/shop",
+      "state": "live",
+      "status": "working",
+      "turn": 103,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3n",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "name": "b1-cart",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3p",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/checkout-layout",
+      "name": "b2-checkout",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3q",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/search-ranking",
+      "name": "b3-search",
+      "parent": "t1n",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3r",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/docs-sidebar",
+      "name": "b4-docs",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3s",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/settings-page",
+      "name": "b5-settings",
+      "parent": "t1n",
+      "state": "live",
+      "status": "blocked",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3t",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/email-digest",
+      "name": "b6-digest",
+      "parent": "t1n",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3v",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/health-check",
+      "name": "b7-health",
+      "parent": "t1n",
+      "state": "live",
+      "status": "idle",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3x",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/mobile-nav",
+      "name": "b8-mobile",
+      "parent": "t1n",
+      "state": "live",
+      "status": "blocked",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3z",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/shop",
+      "state": "live",
+      "turn": 0,
+      "where": "shop / 1"
+    }
+  ]
+}

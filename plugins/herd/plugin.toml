@@ -1,0 +1,15 @@
+schema = 1
+id = "herd"
+name = "Herd"
+version = "0.2.1"
+description = "Watch herdr-core (hc) terminals and agents: status, turns, worktrees, filters, toasts, attach, read, send, interrupt."
+icon = "users"
+host = "host.luau"
+window = "window.luau"
+styles = ["herd.css"]
+
+[[blocks]]
+id = "herd"
+title = "Herd"
+# The window half's "Open herd console" command focuses an open one first.
+palette = false

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Fake `hc` (herdr-core CLI) for the herd plugin's screenshot harness.
+#
+# Answers from the fixture directory in $HERD_FIXTURE, keeps its own state
+# (sequence counter, action log) in $HERD_FIXTURE_STATE. Nothing talks to a
+# real herdr-core: every answer is a file.
+#
+#   HERD_FIXTURE        fixture dir (ls.json, ls-all.json, seq/, get/, read/)
+#   HERD_FIXTURE_STATE  writable scratch dir for this run
+#
+# An address is used as a path, so a machine-qualified one ("build-box/t10")
+# lands in a nested dir: get/build-box/t10.json, read/build-box/t10.txt.
+# `get` also takes get/<addr>.delay (seconds to answer in), and
+# get/<addr>.exit + .stderr (answer, then fail with that code and stderr).
+#
+# Supported: ls [--all] [--json] [--label K=V]…, get ADDR [--json],
+# read ADDR [--lines N], send/interrupt/keys/kill/rm (logged, never real), and
+# attach [--observe] [--history N] ADDR (banner + fixture transcript, then stays
+# open — a pane the plugin split, never a client of a real herdr-core terminal).
+set -u
+
+fixture="${HERD_FIXTURE:-}"
+state="${HERD_FIXTURE_STATE:-}"
+if [ -z "$fixture" ] || [ -z "$state" ]; then
+  echo '{"error":{"kind":"validation_error","message":"fake hc needs HERD_FIXTURE and HERD_FIXTURE_STATE"}}' >&2
+  exit 1
+fi
+mkdir -p "$state" 2>/dev/null
+printf '%s\n' "$*" >>"$state/invocations.log" 2>/dev/null
+
+die_usage() {
+  echo "fake hc: unsupported: $*" >&2
+  exit 2
+}
+
+# hc prints {"error":{kind,message,hint}} on stderr and exits 3 for not_found.
+not_found() {
+  printf '{"error":{"kind":"not_found","message":"no terminal %s","hint":"hc ls shows addresses"}}\n' "$1" >&2
+  exit 3
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+ls)
+  all=0
+  for a in "$@"; do
+    case "$a" in
+    --json) ;;
+    --all) all=1 ;;
+    --label | --label=* | *) ;; # labels narrow the list; the fake ignores them
+    esac
+  done
+  # ls.exit: fail outright, or (with ls.fail-after N) only from call N+1 on, so
+  # a fixture can be good once and then break under a loaded block.
+  if [ -f "$fixture/ls.exit" ]; then
+    n=$(cat "$state/ls.calls" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" >"$state/ls.calls"
+    fail_from=0
+    [ -f "$fixture/ls.fail-after" ] && fail_from=$(tr -dc '0-9' <"$fixture/ls.fail-after")
+    if [ "$n" -gt "${fail_from:-0}" ]; then
+      [ -f "$fixture/ls.stderr" ] && cat "$fixture/ls.stderr" >&2
+      exit "$(tr -dc '0-9-' <"$fixture/ls.exit" | head -c 4)"
+    fi
+  fi
+  # seq/01.json, 02.json …: one answer per call, sticking on the last, so a
+  # single run walks through the fixture's transitions.
+  if [ -d "$fixture/seq" ]; then
+    last=$(ls "$fixture/seq" 2>/dev/null | sed 's/\.json$//' | sort | tail -n1)
+    n=$(cat "$state/seq" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    [ "$n" -gt "${last:-1}" ] && n=${last:-1}
+    echo "$n" >"$state/seq"
+    f=$(printf '%s/seq/%02d.json' "$fixture" "$n")
+    if [ ! -f "$f" ]; then
+      echo "{\"error\":{\"kind\":\"error\",\"message\":\"fixture $fixture has seq/ but no $f\"}}" >&2
+      exit 1
+    fi
+    cat "$f"
+    exit 0
+  fi
+  f="$fixture/ls.json"
+  if [ "$all" = 1 ] && [ -f "$fixture/ls-all.json" ]; then
+    f="$fixture/ls-all.json"
+  fi
+  if [ ! -f "$f" ]; then
+    echo "{\"error\":{\"kind\":\"error\",\"message\":\"fixture $fixture has no $(basename "$f")\"}}" >&2
+    exit 1
+  fi
+  cat "$f"
+  ;;
+get)
+  addr="${1:-}"
+  [ -n "$addr" ] || die_usage "get without an address"
+  # An address may carry a machine ("build-box/t10"); it maps straight onto
+  # the fixture's own directories, so the remote one is a nested path:
+  # get/build-box/t10.json. Same for read/<addr>.txt.
+  base="$fixture/get/$addr"
+  # get/<addr>.delay: seconds to answer in, like a remote machine over a slow
+  # link (the block gives up after 10 s, so a longer delay shows its timeout).
+  if [ -f "$base.delay" ]; then
+    delay=$(tr -dc '0-9.' <"$base.delay")
+    [ -n "$delay" ] && sleep "$delay"
+  fi
+  # get/<addr>.exit + .stderr: answer late (above) and then fail, as hc does
+  # when the machine is unreachable: the error JSON on stderr, that exit code.
+  if [ -f "$base.exit" ]; then
+    [ -f "$base.stderr" ] && cat "$base.stderr" >&2
+    exit "$(tr -dc '0-9-' <"$base.exit" | head -c 4)"
+  fi
+  [ -f "$base.json" ] || not_found "$addr"
+  cat "$base.json"
+  ;;
+read)
+  addr="${1:-}"
+  [ -n "$addr" ] || die_usage "read without an address"
+  lines=40
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = "--lines" ] && lines="$a"
+    prev="$a"
+  done
+  f="$fixture/read/$addr.txt"
+  [ -f "$f" ] || not_found "$addr"
+  tail -n "$lines" "$f"
+  ;;
+send | interrupt | keys | kill | rm | spawn | run)
+  printf '%s\n' "$cmd $*" >>"$state/actions.log"
+  echo '{"ok":true}'
+  ;;
+attach)
+  # The window half runs `<hc_path> attach [--observe] [--history N] ADDR` in a
+  # split pane. Answer it here — banner, the fixture's transcript, then stay
+  # open — so the shot shows the fake and typing into the split is harmless.
+  # This must never exec a real hc: it is the reason the harness pins hc_path.
+  addr=""
+  want=""
+  for a in "$@"; do
+    if [ -n "$want" ]; then want=""; continue; fi
+    case "$a" in
+    --history) want=1 ;;
+    -*) ;;
+    *) addr=$a ;;
+    esac
+  done
+  printf '%s\n' "$cmd $*" >>"$state/actions.log"
+  printf 'FAKE hc attach %s (fixture %s)\n' "${addr:-?}" "$(basename "$fixture")"
+  if [ -n "$addr" ] && [ -f "$fixture/read/$addr.txt" ]; then
+    cat "$fixture/read/$addr.txt"
+  fi
+  exec cat
+  ;;
+*)
+  die_usage "$cmd"
+  ;;
+esac

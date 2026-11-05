@@ -1,0 +1,9 @@
+   Next: I merge each PR as its checks pass, one at a time. Nothing needs you.
+
+ ❯ [IMPORTANT: Background process proc_2f7a9c1d4e6b exited (exit code -15, SIGTERM).
+   Command: scripts/watch-ci.sh 4242
+   Output:
+   ]
+
+   Wave 2 is green: b2-checkout and b3-search are merging; b5-settings is blocked on
+   an approval card, b8-mobile is blocked on the mobile-nav question.

@@ -1,0 +1,10 @@
+{
+  "hidden_finished": 1,
+  "machines": [],
+  "terminals": [
+    { "address": "t1n", "agent": "hermes", "cwd": "/home/alex/code/shop", "state": "live", "status": "working", "turn": 53, "where": "shop / 1" },
+    { "address": "t3n", "agent": "codex", "cwd": "/home/alex/code/shop/.worktrees/cart-totals", "name": "b1-cart", "parent": "t1n", "state": "live", "status": "done", "turn": 2, "where": "shop / 1" },
+    { "address": "t3p", "agent": "codex", "cwd": "/home/alex/code/shop/.worktrees/checkout-layout", "name": "b2-checkout", "parent": "t1n", "state": "live", "status": "done", "turn": 2, "where": "shop / 1" },
+    { "address": "t3q", "agent": "codex", "cwd": "/home/alex/code/shop/.worktrees/search-ranking", "name": "b3-search", "parent": "t1n", "state": "live", "status": "working", "turn": 2, "where": "shop / 1" }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "hidden_finished": 19,
+  "machines": [
+    {
+      "name": "build-box",
+      "since_ms": 1793823416687,
+      "state": "unreachable",
+      "why": "cannot reach build-box: ssh: connect to host build-box port 22: Connection timed out"
+    }
+  ],
+  "terminals": [
+    {
+      "address": "t1n",
+      "agent": "hermes",
+      "cwd": "/home/alex/code/shop",
+      "state": "live",
+      "status": "done",
+      "turn": 116,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3n",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "name": "b1-cart",
+      "parent": "t1n",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3q",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/search-ranking",
+      "name": "b3-search",
+      "parent": "t1n",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3x",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/mobile-nav",
+      "name": "b8-mobile",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t43",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/reply-drafts",
+      "name": "b9-drafts",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "build-box/t10",
+      "agent": "bash",
+      "cwd": "/home/alex",
+      "state": "live",
+      "turn": 0,
+      "where": "alex / 1"
+    }
+  ]
+}

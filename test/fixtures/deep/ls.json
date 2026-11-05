@@ -1,0 +1,465 @@
+{
+  "hidden_finished": 3,
+  "machines": [
+    {
+      "name": "build-box",
+      "since_ms": 1793823416687,
+      "state": "unreachable",
+      "why": "cannot reach build-box: ssh: connect to host build-box port 22: Connection timed out"
+    },
+    {
+      "name": "lab-runner-2",
+      "since_ms": 1793825512004,
+      "state": "stale",
+      "why": "lab-runner-2 stopped answering 4m ago (heartbeat missed)"
+    }
+  ],
+  "terminals": [
+    {
+      "address": "t3a3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/docs-e2e",
+      "name": "worker-docs-e2e",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "done",
+      "turn": 4,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3s1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/sub-lead-ops",
+      "name": "sub-lead-ops",
+      "parent": "t1n",
+      "state": "live",
+      "status": "working",
+      "turn": 3,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2a",
+      "agent": "zsh",
+      "cwd": "/home/alex",
+      "state": "live",
+      "turn": 0,
+      "where": "~ / 1"
+    },
+    {
+      "address": "t3a1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/migrations-0123456789",
+      "name": "worker-migrations-0123456789",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "working",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t1n",
+      "agent": "hermes",
+      "cwd": "/home/alex/code/shop",
+      "state": "live",
+      "status": "working",
+      "turn": 44,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2b",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/shop",
+      "exit_code": 0,
+      "reason": "exited",
+      "state": "finished",
+      "turn": 12,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3a2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/settings-deep-dive",
+      "name": "worker-settings-deep-dive",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "blocked",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3r2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/review-2026-11-04-full-suite",
+      "name": "review-lead",
+      "state": "live",
+      "status": "working",
+      "turn": 7,
+      "where": "shop / 2"
+    },
+    {
+      "address": "t3a4",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/worker-a-very-long-terminal-name-for-truncation-testing",
+      "name": "worker-a-very-long-terminal-name-for-truncation-testing",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "idle",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2c",
+      "agent": "zsh",
+      "cwd": "/home/alex/Desktop",
+      "exit_code": 1,
+      "reason": "killed",
+      "state": "finished",
+      "turn": 0,
+      "where": "Desktop / 1"
+    },
+    {
+      "address": "t3s2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/sub-lead-design-gap-audit-and-full-board-sweep",
+      "name": "sub-lead-design-gap-audit-and-full-board-sweep",
+      "parent": "t1n",
+      "state": "live",
+      "status": "blocked",
+      "turn": 5,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3a5",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/migrations-0123456789",
+      "name": "worker-migrations-repair",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "working",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2d",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/tern-herd",
+      "state": "live",
+      "turn": 1,
+      "where": "code / tern-herd"
+    },
+    {
+      "address": "t3b1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/docs-sidebar",
+      "name": "gap-docs",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "working",
+      "turn": 3,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3b2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/settings-page",
+      "name": "gap-settings",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3r3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/review-2026-11-04-full-suite",
+      "name": "reviewer-a",
+      "parent": "t3r2",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 2"
+    },
+    {
+      "address": "t3b3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/email-digest",
+      "name": "gap-spam",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2e",
+      "agent": "zsh",
+      "cwd": "/home/alex/tmp",
+      "state": "live",
+      "turn": 0,
+      "where": "tmp / 1"
+    },
+    {
+      "address": "t3b4",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/health-check",
+      "name": "gap-health",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "idle",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3r4",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/review-2026-11-04-full-suite",
+      "name": "reviewer-b",
+      "parent": "t3r2",
+      "state": "live",
+      "status": "idle",
+      "turn": 2,
+      "where": "shop / 2"
+    },
+    {
+      "address": "t3b5",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/mobile-nav",
+      "name": "gap-phone",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "blocked",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2f",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/mailer",
+      "exit_code": 0,
+      "reason": "exited",
+      "state": "finished",
+      "turn": 8,
+      "where": "mailer / 1"
+    },
+    {
+      "address": "t3c1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/search-ranking",
+      "name": "gate-search",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "working",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t3c2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/checkout-layout",
+      "name": "gate-checkout",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "done",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t9x",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/orphan-slice",
+      "name": "orphan-slice",
+      "parent": "t8z",
+      "state": "live",
+      "status": "done",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2g",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/tern-herd/test",
+      "state": "live",
+      "turn": 0,
+      "where": "test / 1"
+    },
+    {
+      "address": "t2h",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "state": "live",
+      "turn": 3,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t2j",
+      "agent": "zsh",
+      "cwd": "/home/alex/.local/share/lutris",
+      "exit_code": 130,
+      "reason": "killed",
+      "state": "finished",
+      "turn": 1,
+      "where": "lutris / 1"
+    },
+    {
+      "address": "t3c3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "name": "gate-cart",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "done",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4a1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/bulk-edit",
+      "name": "gap-bulk-edit",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "working",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4a2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/search-page",
+      "name": "gap-search",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4a3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/notifications",
+      "name": "gap-notifications",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "done",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4a4",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/empty-states",
+      "name": "gap-empty-states",
+      "parent": "t3s2",
+      "state": "live",
+      "status": "idle",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4b1",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/ops-audit-log-sweep",
+      "name": "ops-audit-log-sweep",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4b2",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/ops-retention-policy",
+      "name": "ops-retention-policy",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "blocked",
+      "turn": 2,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4b3",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/ops-export-csv-fix",
+      "name": "ops-export-csv-fix",
+      "parent": "t3s1",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4c",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/integration-lead-for-the-overnight-release-candidate",
+      "name": "integration-lead-with-an-extremely-long-name-to-force-truncation-in-the-terminal-column",
+      "state": "live",
+      "status": "working",
+      "turn": 6,
+      "where": "shop / 3"
+    },
+    {
+      "address": "t4d",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/integration-lead-for-the-overnight-release-candidate",
+      "name": "integration-check-a",
+      "parent": "t4c",
+      "state": "live",
+      "status": "idle",
+      "turn": 1,
+      "where": "shop / 3"
+    },
+    {
+      "address": "t4e",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/integration-lead-for-the-overnight-release-candidate",
+      "name": "integration-check-b",
+      "parent": "t4c",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 3"
+    },
+    {
+      "address": "t4f",
+      "agent": "zsh",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "state": "live",
+      "turn": 0,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t4g",
+      "agent": "zsh",
+      "cwd": "/home/alex",
+      "exit_code": 0,
+      "reason": "exited",
+      "state": "finished",
+      "turn": 2,
+      "where": "~ / 2"
+    },
+    {
+      "address": "t4h",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/review-2026-11-04-full-suite",
+      "name": "reviewer-c",
+      "parent": "t3r2",
+      "state": "live",
+      "status": "working",
+      "turn": 1,
+      "where": "shop / 2"
+    },
+    {
+      "address": "t4j",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/review-2026-11-04-full-suite",
+      "name": "reviewer-d",
+      "parent": "t3r2",
+      "state": "live",
+      "status": "done",
+      "turn": 1,
+      "where": "shop / 2"
+    }
+  ]
+}

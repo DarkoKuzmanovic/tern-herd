@@ -1,0 +1,49 @@
+{
+  "address": "t1n",
+  "argv": [
+    "/usr/bin/zsh"
+  ],
+  "cols": 238,
+  "created_ms": 1793733517986,
+  "cwd": "/home/alex/code/shop",
+  "die_with_parent": false,
+  "exit_code": null,
+  "finished_ms": null,
+  "foreground": {
+    "argv": [
+      "hermes",
+      "--resume",
+      "local-demo-session"
+    ],
+    "cwd": "/home/alex/code/shop",
+    "name": "hermes",
+    "pid": 51441
+  },
+  "identity": "ghostty",
+  "keep": true,
+  "labels": {
+    "agent.app": "hermes",
+    "agent.session": "local-demo-session",
+    "herdr.seen": "104",
+    "where": "shop / 1"
+  },
+  "name": null,
+  "notify": true,
+  "parent": null,
+  "pid": 5430,
+  "reason": null,
+  "reported": true,
+  "rm": false,
+  "rows": 51,
+  "screen": "exact",
+  "signal": null,
+  "state": "live",
+  "status": {
+    "app": "hermes",
+    "state": "working"
+  },
+  "status_ms": 1793829396693,
+  "template": null,
+  "title": "⠼ herd run · claude-opus-5-5 · ~/code/shop",
+  "turn": 44
+}
