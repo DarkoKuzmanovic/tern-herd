@@ -8,6 +8,7 @@ run_case() {
 for action in watch doubleclick attach send interrupt; do run_case "$action"; done
 SHOOT_WORKTREE=1 run_case worktree
 SHOOT_CONTENDER=1 run_case doubleclick
+for action in watch-unfocused doubleclick-unfocused; do run_case "$action"; done
 for action in arbitration abandoned reload expire; do
   SHOOT_NO_CONSUMER=1 run_case "$action"
 done

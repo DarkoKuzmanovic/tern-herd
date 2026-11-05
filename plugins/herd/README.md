@@ -257,11 +257,18 @@ terminals that finish while `h` is off just leave the table.
   window plugin, do nothing. No internal action uses a URL or system opener.
   Unlike a file-local kv queue, surface metadata also reaches remote replicas;
   unlike kv get/set, the host's claim arbitration is not a read/write race.
-- Action discovery reads the root at 10 Hz per Herd block in the current
-  session (no descendants or table cells). It stops when no Herd block exists;
-  pane/focus lifecycle events wake it. Tern exposes no surface-update event,
-  so this small steady-state read bounds the two-poll claim/grant latency.
-  Windows with the console focused claim immediately; others defer 200 ms.
+- Action discovery reads only the root (no descendants or table cells):
+  10 Hz while a Herd pane has the window's current focus or this consumer is
+  waiting on a request it might handle; otherwise idle at 2 Hz.
+  It stops when no Herd block exists in the current session. Focus/lifecycle
+  events cancel the old timer and read immediately, so returning to the
+  console does not wait for a background tick. Tern exposes no surface-update
+  event; the tiny steady-state read discovers requests without a URL effect.
+  Focus is read from `cx.session:focused()`, not the remembered per-tab pane
+  flag. Focused consumers claim immediately; others defer at least 200 ms.
+  An unfocused consumer discovers idle requests on a 500 ms tick, then polls
+  every 100 ms through the preference delay and claim/grant handshake until
+  that request leaves the list. The idle rate stays at 2 Hz.
   The API does not expose which window originated a host key or row event,
   so focus is a preference, not a guarantee about the originating replica.
 - Acknowledgements clear requests. Uncompleted requests expire after 5 s

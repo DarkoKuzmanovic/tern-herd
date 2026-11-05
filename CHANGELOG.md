@@ -11,6 +11,8 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
 
 - Watching a terminal by double-click or keyboard no longer also opens a system browser
   or duplicates the action when another Tern client is attached.
+- Console action discovery backs off to twice per second while the console is unfocused,
+  without delaying actions when focus returns or a background consumer has a pending request.
 
 ## [0.2.1] - 2026-11-05
 

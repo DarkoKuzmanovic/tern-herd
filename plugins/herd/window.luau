@@ -140,6 +140,7 @@ local completed: { [string]: boolean } = {}
 local waiting: { [string]: number } = {}
 local request_timer: TimerHandle? = nil
 local REQUEST_MS = 100
+local BACKGROUND_MS = 500
 
 local function poll_requests(cx: WindowCx?)
 	request_timer = nil
@@ -152,11 +153,14 @@ local function poll_requests(cx: WindowCx?)
 		end
 	end
 	local found = false
+	local focused = wcx.session:focused()
+	local herd_focused = false
 	local present: { [string]: boolean } = {}
 	local owner = wcx:window_key() .. ":" .. nonce
 	for _, pane in wcx.session:panes() do
 		if (pane.block == KIND or pane.block == "plugin." .. KIND) and pane.tab and tabs[pane.tab] then
 			found = true
+			if pane.pane == focused then herd_focused = true end
 			-- Root props only: no descendants, rendered text or full-table read.
 			local surface = wcx.session:surface(pane.pane, { root = "main", depth = 0, nodes = 1 })
 			local root = if type(surface) == "table" then surface.main else nil
@@ -177,7 +181,7 @@ local function poll_requests(cx: WindowCx?)
 						end
 						-- Prefer a window with the console focused. No API
 						-- identifies which replica originated the host input.
-						if pane.focused or tern.now() - since >= 200 then
+						if pane.pane == focused or tern.now() - since >= 200 then
 							wcx.session:event(pane.pane, { ev = "action", id = "main", act = "herd_claim=" .. claim })
 						end
 					end
@@ -187,16 +191,17 @@ local function poll_requests(cx: WindowCx?)
 	end
 	for id in completed do if not present[id] then completed[id] = nil end end
 	for id in waiting do if not present[id] then waiting[id] = nil end end
-	if found then request_timer = tern.timer(REQUEST_MS, poll_requests) end
+	if found then request_timer = tern.timer(if herd_focused or next(waiting) ~= nil then REQUEST_MS else BACKGROUND_MS, poll_requests) end
 end
 
 local function wake_requests(_ev: any, cx: WindowCx)
-	if request_timer == nil then poll_requests(cx) end
+	if request_timer then request_timer:cancel(); request_timer = nil end
+	poll_requests(cx)
 end
 
--- No action polling without a Herd block in this session; lifecycle/focus
--- wakes it. There is no surface-update event, so a visible console needs a
--- cheap 10 Hz root-prop read to keep the claim/grant round trip responsive.
+-- No action polling without a Herd block in this session. Focus/lifecycle
+-- changes restart the clock immediately. Use 10 Hz while focused or while
+-- a seen request remains pending; otherwise idle at 2 Hz.
 tern.on("pane_created", wake_requests)
 tern.on("focus", wake_requests)
 tern.on("tab_created", wake_requests)

@@ -249,8 +249,12 @@ warning and shoots anyway — if the redesign renames UI text, change the fixtur
 
 `./test/actions.sh` checks Enter and name-cell double-click each create exactly
 one watch split, writable attach, confirmed send/interrupt, and a private git
-worktree open. It measures key/click-to-visible-split wall time (limit 400 ms)
-and simulated app time. It also checks acknowledgement clearing, first-claim
+worktree open. It measures key/click-to-visible-split wall time (limit 400 ms
+with Herd focused) and simulated app time. Extra Enter/double-click cases
+move focus away before consumption, exercising idle 2 Hz discovery followed
+by 10 Hz pending-request polling and the 200 ms preference delay (1.2 s
+simulated / 2.4 s wall-time ceilings, including discovery and layout settling).
+It also checks acknowledgement clearing, first-claim
 arbitration, refusal of another owner's acknowledgement, reload discarding
 in-flight state, and a 5-second dock notice for missing/abandoned consumers.
 Every normal run must pass the native/PATH opener guard.

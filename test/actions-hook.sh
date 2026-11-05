@@ -31,16 +31,21 @@ check_lua() {
 probe='local p; for _, pane in cx.session:panes() do if pane.block == "herd.herd" or pane.block == "plugin.herd.herd" then p = pane.pane end end; assert(p); local root = cx.session:surface(p, {root="main", depth=0, nodes=1}).main; local q = root.p.herd_requests; '
 
 case "$ACTION_CASE" in
-  watch|doubleclick|attach)
+  watch|doubleclick|attach|watch-unfocused|doubleclick-unfocused)
     before=$(ctl state | jq '[.tabs[].panes] | add')
+    limit=400; steps=12
+    if [[ "$ACTION_CASE" = *-unfocused ]]; then limit=2400; steps=52; fi
     start=$(date +%s%N)
     case "$ACTION_CASE" in
-      watch) ctl key Enter >/dev/null ;;
-      doubleclick) ctl dblclick '.sf-tbl-row.sel>.sf-tbl-c>.sf-t-strong' >/dev/null ;;
+      watch|watch-unfocused) ctl key Enter >/dev/null ;;
+      doubleclick|doubleclick-unfocused) ctl dblclick '.sf-tbl-row.sel>.sf-tbl-c>.sf-t-strong' >/dev/null ;;
       attach) ctl key a >/dev/null ;;
     esac
+    # Emulate the originating replica losing focus before the only capable
+    # consumer sees its grant. This touches only the private headless window.
+    if [[ "$ACTION_CASE" = *-unfocused ]]; then ctl focus next >/dev/null; fi
     elapsed_app=0
-    for _ in {1..12}; do
+    for ((step=0; step<steps; step++)); do
       ctl wait 25 >/dev/null
       elapsed_app=$((elapsed_app + 25))
       sleep 0.025
@@ -49,7 +54,11 @@ case "$ACTION_CASE" in
     done
     elapsed=$((($(date +%s%N) - start) / 1000000))
     [ "$after" -eq $((before + 1)) ] || { echo 'expected exactly one split' >&2; exit 1; }
-    [ "$elapsed" -le 400 ] || { echo "split latency ${elapsed}ms exceeds 400ms" >&2; exit 1; }
+    [ "$elapsed" -le "$limit" ] || { echo "split latency ${elapsed}ms exceeds ${limit}ms" >&2; exit 1; }
+    if [[ "$ACTION_CASE" = *-unfocused ]]; then
+      # Include initial idle discovery and asynchronous surface/layout turns.
+      [ "$elapsed_app" -le 1200 ] || { echo "pending background handshake took ${elapsed_app}ms app time" >&2; exit 1; }
+    fi
     sleep 0.15
     if [ "$ACTION_CASE" = attach ]; then pattern='^attach t44$'; else pattern='^attach --observe --history 200 t44$'; fi
     [ "$(grep -cE "$pattern" "$T/state/actions.log")" -eq 1 ]
