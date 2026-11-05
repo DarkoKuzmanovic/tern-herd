@@ -20,11 +20,13 @@
 --
 -- The selected terminal's card adds `hc get <address> --json` (model, start
 -- time, exit code): fetched 200 ms after the selection settles, at most once
--- every 10 seconds per terminal, and only for the selected one. Rendering
--- never starts a process.
+-- every 10 seconds per terminal. Local artifact discovery uses the same
+-- debounce and a 30-second cadence, after a window proves source locality.
+-- Only the selection is scanned; rendering never starts a process.
 
 local common = require("./common")
 local activity = require("./activity")
+local artifacts = require("./artifacts")
 local ui = tern.ui
 
 local POLL_MS = 2000
@@ -36,6 +38,7 @@ local READ_LINES = 40
 local NOTICE_S = 20
 local DETAIL_DEBOUNCE_MS = 200
 local DETAIL_MAX_AGE_MS = 10 * 1000
+local ARTIFACT_MAX_AGE_MS = 30 * 1000
 local HOME = tern.getenv("HOME")
 
 -- Layout, in cells. The table's columns are sized from the rows it shows
@@ -76,10 +79,10 @@ local KV_GAP_CH = 2
 local ROW_LINES = 4 / 3
 -- The list never shrinks below the toolbar, the header and this many rows.
 local MIN_TABLE_ROWS = 4
--- The card's lines outside its facts: head row, four action rows with their
+-- The card's lines outside its facts: head row, five action rows with their
 -- gaps, and the body's padding. Beside the table the card's height (with a
 -- little slack) bounds the row the two share.
-local CARD_FIXED_H = 10
+local CARD_FIXED_H = 12
 local MIN_LOG_LINES = 6
 
 local FILTERS = { "all", "needs", "working", "done" }
@@ -131,6 +134,12 @@ type Info = {
 -- answer (or failure), which rate-limits the next one.
 type Detail = { info: Info?, error: string?, loading: boolean, at: number? }
 
+type ArtifactState = {
+	address: string?, cwd: string?, epoch: number,
+	specs: { artifacts.Spec }, signature: string, matches: { artifacts.Match },
+	loading: boolean, waiting: boolean, error: string?, at: number?,
+}
+
 -- The last lines `l` read.
 type Logs = {
 	address: string,
@@ -179,6 +188,10 @@ type State = {
 	details: { [string]: Detail },
 	detail_timer: TimerHandle?,
 	detail_busy: boolean,
+	artifact: ArtifactState,
+	artifact_timer: TimerHandle?,
+	artifact_busy: boolean,
+	artifact_pending: boolean,
 	read_busy: boolean,
 	act_busy: boolean,
 	scope_busy: boolean,
@@ -191,6 +204,7 @@ type State = {
 
 -- A pane id survives a block restart; the state object identifies this run.
 local running: { [number]: State } = {}
+local schedule_artifacts: (State, boolean?) -> ()
 
 -- The hc that last started.
 local hc_path: string? = nil
@@ -243,6 +257,10 @@ local function retire(state: State)
 		state.detail_timer:cancel()
 		state.detail_timer = nil
 	end
+	if state.artifact_timer then
+		state.artifact_timer:cancel()
+		state.artifact_timer = nil
+	end
 	-- Pending processes may still call back; they check `alive` first.
 	state.loading = false
 	state.terms = nil
@@ -264,6 +282,23 @@ local function alive(state: State): boolean
 	end
 	retire(state)
 	return false
+end
+
+-- Replace the selected-only result, so every pending callback has an exact
+-- identity to check. A held selection key cancels the debounce, not a process.
+local function invalidate_artifacts(state: State, configured: { artifacts.Spec }?, signature: string?)
+	if state.artifact_timer then state.artifact_timer:cancel(); state.artifact_timer = nil end
+	local previous = state.artifact
+	local specs = configured or artifacts.config()
+	state.artifact = {
+		address = state.cursor, cwd = nil, epoch = previous.epoch + 1,
+		specs = specs, signature = signature or artifacts.signature(specs),
+		matches = {}, loading = false, waiting = false,
+	}
+	for i = #state.requests, 1, -1 do
+		local verb = state.requests[i].verb
+		if verb == "artifact_check" or verb == "artifact_open" then table.remove(state.requests, i) end
+	end
 end
 
 local function first_lines(text: string, n: number): string
@@ -718,6 +753,7 @@ local function set_cursor(state: State, address: string?, index: number)
 	state.index = index
 	if address ~= before then
 		schedule_detail(state)
+		schedule_artifacts(state, true)
 	end
 end
 
@@ -954,6 +990,7 @@ local function refresh(state: State)
 		if state.cursor and not state.detail_timer then
 			fetch_detail(state, state.cursor :: string)
 		end
+		schedule_artifacts(state)
 		state.cx:render()
 	end)
 	if spawn_error then
@@ -985,6 +1022,7 @@ local function switch_scope(state: State, value: string)
 	state.details, state.seen = {}, {}
 	state.logs, state.last_stdout, state.fetched, state.problem = nil, nil, nil, nil
 	if state.detail_timer then state.detail_timer:cancel(); state.detail_timer = nil end
+	invalidate_artifacts(state)
 	local ok, saved = pcall(tern.kv.get, common.KV_PANE_SCOPES)
 	local entries: { any } = if ok and type(saved) == "table" then saved else {}
 	local next_entries: { any } = { { pane = state.cx.pane, run = run or "" } }
@@ -1769,6 +1807,18 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 	-- Actions in deliberate groups: what reaches the terminal (attach, read,
 	-- send), then where to look (its worktree, its subtree), then the one
 	-- destructive action alone at the end of its own row.
+	local artifact_buttons: { Node } = {}
+	local artifact_entry = state.artifact
+	for index, spec in artifact_entry.specs do
+		local match = artifact_entry.matches[index]
+		local path = if match then match.path else nil
+		table.insert(artifact_buttons, button(spec.label, "artifact=" .. index, {
+			size = "sm", icon = "file-text", title = path or spec.path,
+			disabled = if artifact_entry.loading then "Checking local artifacts"
+				elseif artifact_entry.error then artifact_entry.error
+				elseif path == nil then "No matching local file" else nil,
+		}))
+	end
 	table.insert(body, ui.node("col", { key = "actions", gap = "md" }, {
 		ui.node("col", { key = "safe", gap = "sm" }, {
 			ui.node("row", { key = "use", gap = "sm", wrap = true }, {
@@ -1785,6 +1835,7 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 				button("Dock Watch", "dock", { size = "sm", keys = { "d" }, title = "Dock the existing read-only viewer" }),
 				button("Park Watch", "park", { size = "sm", keys = { "z" }, title = "Hide the read-only viewer without stopping its terminal" }),
 			}),
+			ui.node("row", { key = "artifacts", gap = "sm", wrap = true }, artifact_buttons),
 		}),
 		ui.node("row", { key = "danger", gap = "sm", justify = "end" }, {
 			button("Interrupt…", "interrupt", {
@@ -1795,6 +1846,10 @@ local function detail_view(state: State, wide: boolean, cols: number): (Node, nu
 			}),
 		}),
 	}))
+	if state.artifact.error then
+		table.insert(body, ui.text(ui.span(state.artifact.error :: string, "muted")))
+		facts += 1
+	end
 
 	local meta = if term.name then term.address else nil
 	size.icon = AGENT_ICONS[term.agent] or "terminal"
@@ -2005,10 +2060,10 @@ local function toggle_mute(state: State)
 	set_notice(state, if state.muted then "Toasts muted." else "Toasts on.", "muted")
 end
 
-local function enqueue_window(state: State, verb: string, address: string, label: string)
+local function enqueue_window(state: State, verb: string, address: string, label: string): common.WindowRequest?
 	if #state.requests >= 16 then
 		set_notice(state, "Too many pending Herd actions; wait for a window to respond.", "warning")
-		return
+		return nil
 	end
 	request_serial += 1
 	local request: common.WindowRequest = {
@@ -2026,12 +2081,122 @@ local function enqueue_window(state: State, verb: string, address: string, label
 		for i, pending in state.requests do
 			if pending.id == request.id then
 				table.remove(state.requests, i)
-				set_notice(state, "No Herd window completed " .. verb .. " for " .. label .. "; try again.", "warning")
+				if verb == "artifact_check" then
+					local entry = state.artifact
+					if entry.epoch == request.selection then
+						entry.waiting, entry.loading = false, false
+						entry.error = "Local artifacts unavailable: no window confirmed a local Tern host."
+					end
+				else
+					set_notice(state, "No Herd window completed " .. verb .. " for " .. label .. "; try again.", "warning")
+				end
 				state.cx:render()
 				break
 			end
 		end
 	end)
+	return request
+end
+
+-- Discovery waits for one window to confirm that this Herd source belongs
+-- to its local Tern host. In particular, never stat a remote-looking cwd.
+schedule_artifacts = function(state: State, force: boolean?)
+	local term = if state.cursor then state.by_addr[state.cursor :: string] else nil
+	local entry = state.artifact
+	-- Preferences are shared across window VMs. An explicit local save notifies
+	-- live states immediately; polling also observes saves from another window.
+	local specs = artifacts.config()
+	local signature = artifacts.signature(specs)
+	if entry.signature ~= signature or entry.address ~= state.cursor
+		or entry.cwd ~= (if term then term.cwd else nil) then
+		invalidate_artifacts(state, specs, signature)
+		entry = state.artifact
+		entry.cwd = if term then term.cwd else nil
+	end
+	if not term then return end
+	local terminal: Term = term
+	if state.artifact_timer or entry.waiting then return end
+	if state.artifact_busy then
+		if not entry.loading then state.artifact_pending = true; entry.loading = true end
+		return
+	end
+	if not force and entry.at and tern.now() - (entry.at :: number) < ARTIFACT_MAX_AGE_MS then return end
+	entry.loading = true
+	state.artifact_timer = tern.timer(DETAIL_DEBOUNCE_MS, function()
+		if not alive(state) then return end
+		state.artifact_timer = nil
+		if state.artifact ~= entry then return end
+		entry.at = tern.now()
+		if #entry.specs == 0 then
+			entry.loading = false
+		elseif is_remote(terminal.address) then
+			entry.loading = false
+			entry.error = "Artifacts open for local hc terminals only."
+		elseif string.sub(terminal.cwd, 1, 1) ~= "/" then
+			entry.loading = false
+			entry.error = "hc reports no absolute working directory for local artifacts."
+		else
+			local request = enqueue_window(state, "artifact_check", terminal.address, short_of(terminal))
+			if request then
+				request.selection = entry.epoch
+				request.config = entry.signature
+				entry.waiting = true
+			else
+				entry.loading = false
+				entry.error = "Local artifact check could not be queued."
+			end
+		end
+		state.cx:render()
+	end)
+end
+
+local function artifact_context(state: State, value: string)
+	local ok, context = pcall(tern.json.decode, value)
+	local entry = state.artifact
+	if not ok or type(context) ~= "table" or not entry.waiting
+		or context.generation ~= state.scope_epoch or context.selection ~= entry.epoch
+		or context.config ~= entry.signature or context.address ~= entry.address
+		or state.cursor ~= entry.address then return end
+	if entry.signature ~= artifacts.signature(artifacts.config()) then
+		schedule_artifacts(state, true)
+		return
+	end
+	entry.waiting = false
+	if context["local"] ~= true then
+		entry.loading = false
+		entry.error = "Local artifacts unavailable for a remote or unknown Tern host."
+		return
+	end
+	local term = if entry.address then state.by_addr[entry.address :: string] else nil
+	if not term or term.cwd ~= entry.cwd or is_remote(term.address) then return end
+	if state.artifact_busy then state.artifact_pending = true; return end
+	state.artifact_busy = true
+	local generation = state.scope_epoch
+	artifacts.scan(term.cwd, entry.specs, function(matches, err)
+		if not alive(state) then return end
+		state.artifact_busy = false
+		if state.artifact == entry and state.scope_epoch == generation and state.cursor == entry.address then
+			entry.matches, entry.error, entry.loading = matches, err, false
+		end
+		local pending = state.artifact_pending
+		state.artifact_pending = false
+		schedule_artifacts(state, pending)
+		state.cx:render()
+	end)
+end
+
+local function open_artifact(state: State, index: number?)
+	schedule_artifacts(state)
+	local entry = state.artifact
+	local match = if index then entry.matches[index :: number] else nil
+	local term = if state.cursor then state.by_addr[state.cursor :: string] else nil
+	if not term or is_remote(term.address) or term.address ~= entry.address or term.cwd ~= entry.cwd
+		or entry.loading or entry.error or not match or not match.path then
+		set_notice(state, "No current local artifact is available for this selection.", "muted")
+		return
+	end
+	local request = enqueue_window(state, "artifact_open", term.address, match.label)
+	if request then request.path, request.selection, request.config = match.path, entry.epoch, entry.signature end
 end
 
 -- Bare `hc --json` retains Terminal.labels, unlike the reduced `hc ls`
@@ -2128,6 +2293,22 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 		end
 		return
 	end
+	if act_name == "herd_artifact_context" and value then
+		artifact_context(state, value)
+		return
+	elseif act_name == "herd_artifact_specs_changed" then
+		for _, recipient in running do
+			if alive(recipient) then
+				invalidate_artifacts(recipient)
+				schedule_artifacts(recipient, true)
+				recipient.cx:render()
+			end
+		end
+		return
+	elseif act_name == "artifact" then
+		open_artifact(state, if value then tonumber(value) else nil)
+		return
+	end
 	if act_name == "retry" or act_name == "refresh" then
 		refresh(state)
 		sync_activity()
@@ -2222,6 +2403,7 @@ tern.block.define("herd", {
 				end
 			end
 		end
+		local artifact_specs = artifacts.config()
 		remember_scope(run)
 		local filter = str(s.filter)
 		local state: State = {
@@ -2257,6 +2439,13 @@ tern.block.define("herd", {
 			details = {},
 			detail_timer = nil,
 			detail_busy = false,
+			artifact = {
+				epoch = 0, specs = artifact_specs, signature = artifacts.signature(artifact_specs),
+				matches = {}, loading = false, waiting = false,
+			},
+			artifact_timer = nil,
+			artifact_busy = false,
+			artifact_pending = false,
 			read_busy = false,
 			act_busy = false,
 			scope_busy = false,
@@ -2362,6 +2551,7 @@ tern.block.define("herd", {
 			main = ui.node("col", { role = "herd.console", herd_requests = state.requests,
 				herd_scope = state.run or "", herd_scopes = state.scopes, herd_generation = state.scope_epoch,
 				herd_cursor = state.cursor or "", herd_inbox = state.inbox,
+				herd_selection = state.artifact.epoch, herd_artifacts = state.artifact,
 				herd_activity = state.activity, herd_unread = state.unread,
 				herd_summary = { working = summary_counts.working or 0, blocked = summary_counts.blocked or 0,
 					errors = summary_counts.error or 0, unread = state.unread, run = state.run or "" } }, {

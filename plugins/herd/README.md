@@ -100,8 +100,9 @@ Views):
   under them. Its buttons come in fixed
   groups: **Attach**, **Logs**, **Send…** (what reaches the terminal), then
   **Worktree** and **Focus** (where to look), **Float Watch**, **Dock Watch**
-  and **Park Watch** (read-only viewer layout), then **Interrupt…** alone at
-  the end of its own row. A button that can't apply is disabled with the reason.
+  and **Park Watch** (read-only viewer layout), **Report**, **Review** and
+  **Brief** (existing local artifacts), then **Interrupt…** alone at the end
+  of its own row. A button that can't apply is disabled with the reason.
 - **Logs card**: `l` reads the last 40 lines once (`hc read <t> --lines 40`)
   into a card under the view, in a box half the pane tall that opens at the
   newest line and scrolls up. `l` again reads again; nothing polls it.
@@ -235,6 +236,56 @@ native or moved-to-another-host/session panes are pruned. Unknown or ambiguous
 ownership is refused, not guessed. Layout controls only affect Tern's disposable
 view: no stop, send or interrupt reaches the hc terminal.
 
+### Local artifacts
+
+The selected terminal's card opens **Report**, **Review** and **Brief** in
+Tern's native document view beside the console, never through a system opener.
+Defaults are `.scratch/report.md`, `.scratch/review-*.md` and
+`.scratch/brief.md`, relative to hc's working directory. Review chooses the
+greatest actual filesystem modification time (including nanoseconds), not the
+greatest filename; equal mtimes use a deterministic lexical path tie-break.
+Missing files remain disabled. Herd never creates reports, briefs or review files.
+
+Choose **Configure Herd artifacts** (`plugin.herd.artifacts`) in the palette.
+It presents the saved JSON array directly, without opening, focusing or
+unparking a console. For example:
+
+```json
+[
+  {"label":"Report","path":".scratch/report.md"},
+  {"label":"Review","path":".scratch/review-*.md"},
+  {"label":"Brief","path":".scratch/brief.md"}
+]
+```
+
+An empty array `[]` disables links. Specs are global to this local Tern plugin
+and saved in its `artifact_specs` KV entry, surviving reloads. Saving refreshes
+all live selected scans; a closed console stays closed. Up to eight entries
+are allowed; labels have 1–32 characters, paths 1–256, without controls.
+Paths must be relative and cannot contain `..`, drive prefixes or backslashes.
+At most one `*` is supported, in the basename only; `?`, bracket and brace
+globs are not supported. Invalid input leaves the previous specs unchanged.
+No absolute cwd, discovered path or file contents are persisted.
+
+Discovery waits 200 ms after selection settles and refreshes at most every
+30 seconds via normal polling. Only the selected terminal is scanned, with
+one discovery process in flight per console; changing selection/scope/config
+invalidates older callbacks, queues only the latest selection and immediately
+removes old links. Rendering launches no process. Before even inspecting a
+directory, the single-owner mailbox requires a window to identify this Herd
+source as belonging to its local Tern host. Remote hc addresses are refused
+before that check; remote/unknown Tern hosts are refused before any filesystem
+scan. Native opening rechecks selection, scope, source, saved specs and current
+local host, so changing preferences cannot retarget an already queued open.
+
+The scanner requires **GNU find on Linux** (`-printf`); macOS/BSD find is
+unsupported and macOS remains untested. It uses argv, never a shell command,
+follows no nested symlink directories, and prunes unrelated subdirectories.
+Each scan has a two-second timeout, at most 256 candidates and 64 KiB of
+output; exceeding a bound, missing GNU find or malformed output disables the
+result with an honest error rather than picking a possibly stale “newest”
+file. No artifact file contents are loaded until you explicitly open a matching
+document.
 
 ### Next / previous needs-you
 

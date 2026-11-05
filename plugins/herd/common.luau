@@ -60,6 +60,9 @@ export type WindowRequest = {
 	owner: string?,
 	generation: number?,
 	scopes: { string }?,
+	selection: number?,
+	path: string?,
+	config: string?,
 }
 
 -- One POSIX shell word.

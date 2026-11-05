@@ -5,8 +5,9 @@ throwaway `tern serve` and writes PNGs to `test/shots/`. It is the way to look
 at the plugin's UI without a live herd, a live Tern window or a real
 herdr-core, and the way to diff a redesign against the same fixtures.
 
-Needs: `bash`, `jq`, `tern` on `PATH` (0.9.12 or newer; `TERN=/path/to/tern`
-overrides), and a `hc`-shaped fixture — the real herdr-core is never started.
+Needs: `bash`, `jq`, GNU `find`/`touch`/`stat`, `tern` on `PATH` (0.9.12
+or newer; `TERN=/path/to/tern` overrides), and a `hc`-shaped fixture — the real
+herdr-core is never started.
 
 ## Run
 
@@ -19,7 +20,7 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
 ./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
-./test/actions.sh                                      # actions, viewer lifecycle/layout, scopes, needs-you, activity and opener guard
+./test/actions.sh                                      # actions, viewers, scopes, needs-you, activity, artifacts and opener guard
 ```
 
 | option | meaning |
@@ -33,6 +34,7 @@ cd ~/code/tern-herd
 | `SHOOT_NO_CONSUMER=1` | load a bootstrap-only window half; no action consumer, for expiry and manual claim tests |
 | `SHOOT_WORKTREE=1` | replace fixture cwd values in the temporary copy with a new private git repository for `w` |
 | `SHOOT_PHASED=1` | copy the fixture privately before starting Tern, park `seq/` as `phases/`, and hold phase 01 until a hook atomically promotes another snapshot; never edits repository fixtures |
+| `SHOOT_ARTIFACTS=1` | copy `artifacts` fixture/files privately, rewrite local cwd values to real private directories, set review mtimes deterministically, and log genuine GNU `find` calls; repository fixtures are unchanged |
 
 ### `sleep:MS` vs `wait:MS`
 
@@ -66,6 +68,7 @@ with spaces and colons as `_`/`-`):
 | `<name>.tree.txt` | the element tree the shot was taken from (what readiness waited for) |
 | `<name>.hc.log` | every fake-`hc` invocation of the run, then the actions (`send`/`interrupt`/…) the block ran |
 | `<name>.system.json` | Tern's native system-action log; external URL/file/reveal requests fail the run |
+| `<name>.find.log` | artifact cases only: argv of genuine GNU `find` discovery calls, including a held/released stale-selection call |
 
 The block opens **beside** the serve's startup shell, so the harness zooms its
 pane (`tern` world command `zoom`) until the tab is zoomed on the Herd pane
@@ -248,6 +251,7 @@ Shipped fixtures:
 | `activation` | fictional `spam-192` at `t44`, plus `cart #2 (review/ready)` at `build-box/t45`; action regression data, not a live terminal |
 | `scopes` | All terminals contains `b1-cart` working, `b2-checkout` blocked and `b3-review` error; `scopes/cart/` contains only the cart builder and `scopes/checkout/` only checkout. Cart details are at the fixture root, checkout details are in its scope, and review's selected-card reply is delayed 2 s for scope-switch regression coverage |
 | `activity` | baseline `t70` already finished plus four working builders; phase 02 blocks `t71`, finishes nonselected `t72` with exit 7, completes `t73`, and removes `t74`; phase 03 resumes `t71`, phase 04 completes it. Expected activity counts: 0 → 3 → 3 → 4 |
+| `artifacts` | local `t81` has real private Report/Review/Brief files with `SHOOT_ARTIFACTS=1`; local `t82` has none; `build-box/t83` is remote. `review-001.md` is newer by mtime than the lexical decoy `review-999.md` |
 
 Fake data is modelled on the real thing: `hc ls --json` is
 `{hidden_finished, machines:[{name,since_ms,state,why}], terminals:[{address,agent,cwd,state,status,turn,where,name?,parent?}]}`
@@ -471,6 +475,79 @@ For an automatic-sequence visual preview instead, use
 not the deterministic regression test: the fake advances `seq/` on every
 list call. Inbox history is observed metadata while consoles poll, not a
 complete terminal audit.
+
+Artifact cases run with `SHOOT_ARTIFACTS=1` and the real production permission
+mailbox, filesystem helper, native configuration prompt and `cx.docs:open`.
+The copied fixture's local cwd fields point to `<tmp>/artifacts` and
+`<tmp>/artifacts-missing`; the source fixture retains fictional paths. Actual
+fixture file contents are copied into the former, and mtimes explicitly make
+`review-001.md` newer than `review-999.md`. A private PATH wrapper logs argv
+then runs `/usr/bin/find` unchanged. It never invents matches or context
+replies. Native file-pane paths and readable content, not a mocked open result,
+prove a document opened.
+Configuration is a global window preference: saving requires no Herd pane,
+console focus or host configuration mailbox. Discovery and document opens
+still use the real local-host permission path.
+
+- `artifact-open` opens Report, newest-mtime Review and Brief through production
+  host actions and asserts exact private paths, document kind and file text.
+  Initial discovery invokes `find` once for the selected cwd, not every row.
+- `artifact-mtime` changes real private review mtimes by one nanosecond at the
+  current epoch, checks their stored nanoseconds with GNU `stat`, and selects
+  `review-999.md` then `review-001.md` through genuine rescans and native file
+  reads. An exact timestamp tie chooses lexical `review-001.md`. A same-second
+  pre-epoch pair checks GNU find's signed-floor-seconds/positive-fraction
+  ordering when GNU `touch` and the private filesystem preserve those times;
+  unsupported pre-epoch precision is explicitly reported as a skipped subcase.
+- `artifact-missing-remote` selects the empty local cwd and asserts all three
+  match slots lack paths and cannot open. The remote hc row yields an explicit
+  local-only error with zero further `find` calls or file panes. A changed
+  notice is the barrier before testing its separate refusal.
+- `artifact-config` queries the native command palette for
+  `Configure Herd artifacts`, waits for rendered command-label text outside
+  input values, and presses native Enter once. The resulting native prompt
+  saves a global custom link. Two real live Herd consoles must invalidate their
+  old roots and refresh specs/results after both custom and `[]` saves, without
+  changing the focused pane. The test opens the custom document and checks
+  persistence after fixture reload. Invalid traversal and empty-object `{}`
+  configurations preserve private KV and both consoles' live specs. `[]`
+  disables discovery/opens and remains disabled after another reload. Native
+  `select-text` replaces the focused prompt's prefilled ASCII JSON; no direct
+  palette-action dispatch or synthetic configuration response substitutes for
+  the visible palette/prompt path.
+- `artifact-config-closed` closes the console and saves global preferences
+  through the native palette/prompt while asserting that zero Herd panes
+  exist. Only a separate explicit Open Herd action creates a console; it must
+  then discover and open the configured Summary document. Reload retains the
+  preferences without reopening their prompt.
+- `artifact-stale` first observes the missing selection, then selects the
+  populated cwd and holds its real `find` before execution. After a
+  `find.started` barrier, the native selection changes back to the missing
+  cwd; only then does `find.release` permit GNU `find` to return genuine old
+  paths. `find.completed` and root selection/result barriers prove those
+  paths never replace the current matches or open a document. The private
+  hold is capped below the production two-second process timeout.
+
+These cases do not invoke the cold-scope-only mailbox adapter or add a new
+driver. Existing explicit-action mailbox assertions ignore automatic
+`artifact_check` permission requests, not steering requests; the actual
+production consumer must still answer permissions for discovery to finish.
+Every case rejects fake terminal actions and retains the external-opener
+guards. A genuinely remote **Tern host** is not available in this standalone
+serve: its native-host ownership refusal remains unverified here, distinct
+from the covered remote **hc address** refusal.
+
+Run just the artifact cases:
+
+```sh
+for action in artifact-open artifact-mtime artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
+  ACTION_CASE=$action SHOOT_ARTIFACTS=1 SHOOT_SCOPE_OPEN_DRAIN=0 \
+    SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh artifacts
+done
+```
+
+For a static visual preview with real private files:
+`SHOOT_ARTIFACTS=1 ./test/shoot.sh artifacts`.
 
 
 `tern serve` is a standalone headless window, not a daemon session to which a

@@ -1,0 +1,6 @@
+{
+  "address":"build-box/t83", "argv":["codex","--no-daemon"], "created_ms":1793865673515,
+  "cwd":"/home/alex/code/shop", "name":"b3-remote",
+  "labels":{"run":"remote"}, "state":"live", "status":{"app":"codex","state":"done"},
+  "turn":3, "title":"Fictional remote artifact example"
+}

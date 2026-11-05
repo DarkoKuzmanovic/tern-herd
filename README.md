@@ -16,6 +16,7 @@ Watch and steer [herdr-core](https://herdr.dev) terminals and coding agents from
 - An Activity inbox with shared unread badges, observed transition history and scope-aware Mark read/Clear.
 - A selected-terminal card with model, status age, parent, worktree and exit details; logs on demand.
 - Reused read-only Watch viewers, explicit float/dock/park controls, separate writable Attach, and confirmed send/interrupt actions.
+- Configurable local Report/Review/Brief links, opened as native documents; Review chooses the newest file by modification time.
 - Transition toasts, a mute switch and status-line counts of working, blocked, errored and unread activity.
 - Responsive narrow layouts, remote-machine warnings and the last good list when `hc` stops answering.
 
@@ -82,6 +83,16 @@ These focus (or unpark/open) the current session's console and cycle blocked/err
 terminals in its saved run scope, wrapping in full tree order. They only select:
 no watch, attach or send happens automatically. With multiple consoles, the focused
 one wins, then the most recently focused/used, then the lowest pane id.
+
+The selected card's **Report**, **Review** and **Brief** buttons open existing
+local files beside the console. Choose **Configure Herd artifacts**
+(`plugin.herd.artifacts`) to edit global relative-path specs without opening a
+console; `[]` disables the links. Defaults are `.scratch/report.md`,
+`.scratch/review-*.md`
+(newest actual modification time), and `.scratch/brief.md`. Linux with GNU
+`find` is supported; remote hc terminals and remote/unknown Tern source hosts
+are refused rather than interpreting their paths on this machine. See the
+[artifact guide](plugins/herd/README.md#local-artifacts) for configuration and limits.
 
 | Key | Action |
 |---|---|
@@ -183,6 +194,7 @@ The harness copies the plugin, pins a fake `hc`, isolates Tern's config/state/da
 | `plugins/herd/activity.luau` | Shared bounded activity metadata, transition baselines and unread state |
 | `plugins/herd/herd.css` | Scoped responsive layout |
 | `plugins/herd/viewers.luau` | Bounded viewer registry with explicit read/write, host/session and pane identity |
+| `plugins/herd/artifacts.luau` | Bounded selected-only GNU find discovery, relative specs and actual-mtime selection |
 | `test/` | Type-check script, isolated screenshot harness, fake `hc` and fictional fixtures |
 | `docs/screenshots/` | Reviewed, metadata-stripped README screenshots |
 

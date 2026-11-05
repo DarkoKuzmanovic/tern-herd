@@ -15,6 +15,10 @@
 # SHOOT_PHASED=1 copies a seq/ fixture privately, parks seq/ as phases/ and
 # starts at phase 01. Hooks explicitly promote snapshots; idle polls cannot
 # consume a later phase. The source fixture is never changed.
+# SHOOT_ARTIFACTS=1 gives the artifacts fixture private real files/cwds,
+# deterministic review mtimes and a logging wrapper around real GNU find.
+# Hooks may hold one discovery call briefly to test stale-selection guards;
+# no filesystem matches or document responses are fabricated.
 #
 # Isolated per run: control socket, TERN_DAEMON_SOCKET, TERN_CONFIG_DIR,
 # XDG_STATE_HOME/DATA_HOME/CACHE_HOME, and a fake `hc` first on PATH.
@@ -57,7 +61,7 @@ while [ $# -gt 0 ]; do
       ;;
     --keys=*) KEYS=${1#--keys=}; shift ;;
     -h | --help)
-      sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*) echo "shoot: unknown option $1" >&2; exit 2 ;;
@@ -196,7 +200,7 @@ shoot_one() {
     "$T/xdg/data" "$T/xdg/cache" "$T/config" "$T/shots"
   cp -r "${SHOOT_PLUGIN_DIR:-$REPO/plugins/herd}" "$T/crates/plugins/fixtures/herd"
 
-  if [ -n "${SHOOT_WORKTREE:-}${SHOOT_PHASED:-}" ]; then
+  if [ -n "${SHOOT_WORKTREE:-}${SHOOT_PHASED:-}${SHOOT_ARTIFACTS:-}" ]; then
     cp -r "$fix" "$T/fixture"
     fix=$T/fixture
   fi
@@ -225,6 +229,24 @@ shoot_one() {
     while IFS= read -r -d '' file; do
       jq --arg cwd "$T/worktree" 'walk(if type == "object" and has("cwd") then .cwd = $cwd else . end)' \
         "$file" >"$file.tmp"
+      mv "$file.tmp" "$file"
+    done < <(find "$fix" -name '*.json' -print0)
+  fi
+  if [ -n "${SHOOT_ARTIFACTS:-}" ]; then
+    [ "$scen" = artifacts ] || { echo "shoot: artifact setup requires the artifacts fixture" >&2; return 1; }
+    mkdir -p "$T/artifacts" "$T/artifacts-missing"
+    cp -r "$fix/files/." "$T/artifacts/"
+    # Git preserves content, not mtimes: the lower-numbered review is really
+    # newer, so a lexical filename sort cannot accidentally pass the test.
+    touch -t 202601010000 "$T/artifacts/.scratch/review-999.md"
+    touch -t 202601020000 "$T/artifacts/.scratch/review-001.md"
+    while IFS= read -r -d '' file; do
+      jq --arg root "$T/artifacts" --arg missing "$T/artifacts-missing" \
+        'walk(if type == "object" and has("cwd") then
+          if .address? == "t81" then .cwd = $root
+          elif .address? == "t82" then .cwd = $missing
+          else . end
+        else . end)' "$file" >"$file.tmp"
       mv "$file.tmp" "$file"
     done < <(find "$fix" -name '*.json' -print0)
   fi
@@ -271,6 +293,28 @@ shoot_one() {
   # No desktop opener may escape this isolated process. Headless Tern also
   # records native shell requests (including ones that never spawn a process).
   mkdir -p "$T/state"
+  if [ -n "${SHOOT_ARTIFACTS:-}" ]; then
+    # This is a real GNU find adapter, never a synthetic scanner response.
+    # Only this private Tern's PATH sees it; argv/stdout/status stay genuine.
+    {
+      printf '#!/bin/bash\n'
+      printf 'printf "find" >>%q\n' "$T/state/find.log"
+      printf 'printf " %%q" "$@" >>%q\n' "$T/state/find.log"
+      printf 'printf "\\n" >>%q\n' "$T/state/find.log"
+      printf 'if [ -e %q ] && [ "${2:-}" = %q ]; then\n' "$T/state/find.hold" "$T/artifacts"
+      printf '  : >%q; n=0\n' "$T/state/find.started"
+      printf '  while [ ! -e %q ]; do\n' "$T/state/find.release"
+      printf '    if [ "$n" -ge 60 ]; then echo "private find barrier exceeded 1.5 seconds" >&2; exit 124; fi\n'
+      printf '    n=$((n + 1)); sleep 0.025\n'
+      printf '  done\n'
+      printf 'fi\n'
+      printf '/usr/bin/find "$@"\n'
+      printf 'status=$?\n'
+      printf ': >%q\n' "$T/state/find.completed"
+      printf 'exit "$status"\n'
+    } >"$T/bin/find"
+    chmod +x "$T/bin/find"
+  fi
   {
     echo '#!/bin/bash'
     printf 'printf "external-open %%q" "${0##*/}" >>%q\n' "$T/state/actions.log"
@@ -472,6 +516,7 @@ shoot_one() {
     echo "# actions (send/interrupt/keys/kill/rm)"
     cat "$T/state/actions.log" 2>/dev/null || echo "(none)"
   } >"$OUT/$name.hc.log"
+  [ ! -f "$T/state/find.log" ] || cp "$T/state/find.log" "$OUT/$name.find.log"
   printf '%s\n' "$tree" >"$OUT/$name.tree.txt"
   ctl system >"$OUT/$name.system.json"
   if grep -q '^external-open ' "$T/state/actions.log" 2>/dev/null ||

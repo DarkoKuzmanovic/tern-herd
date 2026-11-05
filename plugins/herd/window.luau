@@ -1,10 +1,11 @@
 --!strict
--- Window-only actions use the block's inert surface mailbox, not URL effects.
+-- Host-originated window actions use the inert surface mailbox, not URL effects.
 -- The host grants each request to one window, even with multiple replicas.
 -- This half also owns the palette command, key and status segment.
 
 local common = require("./common")
 local viewers = require("./viewers")
+local artifacts = require("./artifacts")
 
 local KIND = common.KIND
 local ACTION = common.OPEN_ACTION
@@ -150,7 +151,6 @@ tern.command({
 		open_herd(cx, "scope")
 	end,
 })
-
 
 tern.command({
 	id = "next_needs", title = "Next Herd terminal that needs you", icon = "users",
@@ -336,6 +336,121 @@ local function open_worktree(cx: WindowCx, path: string, label: string)
 	end
 end
 
+local function herd_props(cx: WindowCx, source: number): { [string]: any }?
+	local pane = cx.session:pane(source)
+	if pane == nil or not is_herd(pane) then return nil end
+	local surface = cx.session:surface(source, { root = "main", depth = 0, nodes = 1 })
+	local root = if type(surface) == "table" then surface.main else nil
+	return if root then root.p else nil
+end
+
+-- A local-looking hc address is insufficient: the console itself can belong
+-- to a remote Tern host. Require exact source membership and a current choice.
+local function artifact_context(cx: WindowCx, source: number, request: common.WindowRequest): (ManagedHost?, string?)
+	if request.address == "" or string.find(request.address, "/", 1, true) then
+		return nil, "Artifact paths require a local hc terminal."
+	end
+	local props = herd_props(cx, source)
+	if props == nil then return nil, "The source Herd console is no longer available." end
+	if type(request.generation) ~= "number" or type(request.selection) ~= "number"
+		or props.herd_generation ~= request.generation or props.herd_selection ~= request.selection
+		or props.herd_cursor ~= request.address then
+		return nil, "The selected terminal or run scope changed."
+	end
+	local observed = props.herd_artifacts
+	if type(request.config) ~= "string" or type(observed) ~= "table"
+		or observed.signature ~= request.config or request.config ~= artifacts.signature(artifacts.config()) then
+		return nil, "Artifact configuration changed."
+	end
+	local owner: ManagedHost? = nil
+	local memberships = 0
+	for _, host in cx.hosts:list() do
+		for _, pane in host.panes do
+			if pane == source then
+				owner = host
+				memberships += 1
+			end
+		end
+	end
+	if memberships ~= 1 or owner == nil then return nil, "The source Herd host is unknown or ambiguous." end
+	if owner.kind ~= "local" then return nil, "Artifact paths require a local Herd host." end
+	return owner, nil
+end
+
+local function configure_artifacts(cx: WindowCx)
+	cx:prompt({
+		value = tern.json.encode(artifacts.config()),
+		placeholder = "Artifact specs (JSON array; [] disables)", action = "save",
+	}):next(function(value: string?, why: string?, current: WindowCx?)
+		if current == nil then return end
+		if value == nil then
+			if why then current:toast("error", "Could not configure Herd artifacts", why) end
+			return
+		end
+		local decoded, specs = pcall(tern.json.decode, value)
+		if not decoded then
+			current:toast("error", "Artifact specs must be a JSON array of label/path objects.", nil)
+			return
+		end
+		local saved, err = artifacts.configure(specs)
+		if not saved then
+			current:toast("error", err or "Could not configure Herd artifacts", nil)
+			return
+		end
+		current:toast("success", "Artifact links saved.", nil)
+		-- Configuration is global to this local plugin, independent of focus
+		-- or console lifetime. Notify one proven-local console when present;
+		-- its host broadcasts invalidation to the other live console states.
+		local local_sources: { [number]: boolean } = {}
+		for _, host in current.hosts:list() do
+			for _, pane in host.panes do
+				local_sources[pane] = if local_sources[pane] == nil then host.kind == "local" else false
+			end
+		end
+		for _, pane in current.session:panes() do
+			if is_herd(pane) and local_sources[pane.pane] then
+				current.session:event(pane.pane, { ev = "action", id = "main", act = "herd_artifact_specs_changed" })
+				return
+			end
+		end
+	end)
+end
+
+tern.command({
+	id = "artifacts", title = "Configure Herd artifacts", icon = "file",
+	run = configure_artifacts,
+})
+
+local function open_artifact(cx: WindowCx, source: number, request: common.WindowRequest)
+	local owner, why = artifact_context(cx, source, request)
+	if owner == nil then
+		cx:toast("error", "Cannot open Herd artifact", why)
+		return
+	end
+	local path = request.path
+	if path == nil or string.sub(path, 1, 1) ~= "/" then
+		cx:toast("error", "Cannot open Herd artifact", "The artifact path must be absolute.")
+		return
+	end
+	cx.layout:focus(source)
+	local current = cx.hosts:current()
+	if cx.session:focused() ~= source or current.kind ~= "local" or current.id ~= owner.id then
+		cx:toast("error", "Cannot open Herd artifact", "The focused host does not match the local Herd source.")
+		return
+	end
+	-- Focusing can run lifecycle callbacks. Do not open a path whose source,
+	-- ownership or selected terminal changed while that happened.
+	local fresh, changed = artifact_context(cx, source, request)
+	if fresh == nil or fresh.id ~= owner.id then
+		cx:toast("error", "Cannot open Herd artifact", changed or "The source Herd host changed.")
+		return
+	end
+	local ok, opened = pcall(function(): number
+		return cx.docs:open(path, { how = "beside" })
+	end)
+	if not ok then cx:toast("error", "Could not open Herd artifact", tostring(opened)) end
+end
+
 local function dispatch(cx: WindowCx, pane: number, request: common.WindowRequest)
 	local verb, address, name = request.verb, request.address, request.label
 	if verb == "watch" or verb == "attach" or verb == "float" or verb == "dock" or verb == "park" then
@@ -348,6 +463,15 @@ local function dispatch(cx: WindowCx, pane: number, request: common.WindowReques
 		open_worktree(cx, address, name)
 	elseif verb == "scope" then
 		choose_scope(cx, pane, request)
+	elseif verb == "artifact_check" then
+		local owner = artifact_context(cx, pane, request)
+		local value = tern.json.encode({
+			address = request.address, generation = request.generation, selection = request.selection, ["local"] = owner ~= nil,
+			config = request.config,
+		})
+		cx.session:event(pane, { ev = "action", id = "main", act = "herd_artifact_context=" .. value })
+	elseif verb == "artifact_open" then
+		open_artifact(cx, pane, request)
 	end
 end
 

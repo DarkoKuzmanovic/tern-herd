@@ -34,7 +34,7 @@ check_lua() {
   fi
   ctl carly close >/dev/null
 }
-probe='local p; for _, pane in cx.session:panes() do if pane.block == "herd.herd" or pane.block == "plugin.herd.herd" then p = pane.pane end end; assert(p); local root = cx.session:surface(p, {root="main", depth=0, nodes=1}).main; local q = root.p.herd_requests; '
+probe='local p; for _, pane in cx.session:panes() do if pane.block == "herd.herd" or pane.block == "plugin.herd.herd" then p = pane.pane end end; assert(p); local root = cx.session:surface(p, {root="main", depth=0, nodes=1}).main; local q = {}; for _, request in root.p.herd_requests do if request.verb ~= "artifact_check" then table.insert(q, request) end end; '
 scope_event() {
   local run_json
   run_json=$(jq -Rn --arg run "$1" '$run')
@@ -238,7 +238,284 @@ viewer_counts() {
   return 1
 }
 
+# Artifact cases use private files and real discovery/document APIs. No context
+# response, filesystem match, mailbox acknowledgement or document result is faked.
+artifact_root='assert(artifact_source and cx.session:pane(artifact_source)); local root = cx.session:surface(artifact_source, {root="main", depth=0, nodes=1}).main; local a = root.p.herd_artifacts; assert(a); '
+artifact_current_config='[{"label":"Report","path":".scratch/report.md"},{"label":"Review","path":".scratch/review-*.md"},{"label":"Brief","path":".scratch/brief.md"}]'
+artifact_wait() {
+  local address count
+  address=$(jq -Rn --arg value "$1" '$value'); count=$2
+  wait_lua "${artifact_root}assert(root.p.herd_cursor == $address and a.address == $address and a.at ~= nil and not a.loading and not a.waiting and #a.matches == $count)"
+}
+artifact_initialize() {
+  [ -n "${SHOOT_ARTIFACTS:-}" ]
+  [ -f "$T/artifacts/.scratch/report.md" ]
+  [ ! -d "$T/artifacts-missing/.scratch" ]
+  check_lua "${probe}artifact_source = p; assert(root.p.herd_cursor == 't81')"
+  artifact_wait t81 3
+  local base
+  base=$(jq -Rn --arg value "$T/artifacts/.scratch/" '$value')
+  check_lua "${artifact_root}assert(not a.error and a.matches[1].path == $base .. 'report.md' and a.matches[2].path == $base .. 'review-001.md' and a.matches[3].path == $base .. 'brief.md')"
+  [ "$(artifact_find_count)" -eq 1 ]
+}
+artifact_find_count() {
+  if [ -f "$T/state/find.log" ]; then grep -c '^find ' "$T/state/find.log" || true; else printf '0\n'; fi
+}
+artifact_event() {
+  local action
+  action=$(jq -Rn --arg value "$1" '$value')
+  check_lua "cx.layout:focus(artifact_source); cx.session:event(artifact_source, {ev='action', id='main', act=$action})"
+}
+artifact_no_documents() {
+  check_lua "for _, pane in cx.session:panes() do assert(pane.kind ~= 'file', 'unexpected native file pane: ' .. tostring(pane.path)) end"
+  [ ! -s "$T/state/actions.log" ]
+}
+artifact_buttons() {
+  local reason
+  reason=$(jq -Rn --arg value "${2:-}" '$value')
+  wait_lua "local tree = cx.session:surface(artifact_source,{root='main',depth=16,nodes=2000}).main; local count = 0; local function visit(n) if string.match(n.id, 'artifact=%d+$') then count += 1; if $reason ~= '' then assert(string.find(tern.json.encode(n), $reason, 1, true)) end end; for _, child in n.c or {} do visit(child) end end; visit(tree); assert(count == $1, 'wrong artifact button count')"
+}
+artifact_open() {
+  local path heading
+  path=$(jq -Rn --arg value "$T/artifacts/$2" '$value')
+  heading=$(jq -Rn --arg value "$3" '$value')
+  artifact_event "artifact=$1"
+  wait_lua "${artifact_root}local file; for _, pane in cx.session:panes() do if pane.kind == 'file' and pane.path == $path then file = pane.pane end end; assert(file and cx.session:focused() == file); local read = cx.session:read(file, {lines=40}); assert(read.kind == 'file' and read.path == $path and string.find(table.concat(read.lines, '\n'), $heading, 1, true)); artifact_document = file"
+  check_lua "cx.layout:close(artifact_document); cx.layout:focus(artifact_source)"
+  [ ! -s "$T/state/actions.log" ]
+}
+artifact_submit() {
+  # Tern's native text-system selection addresses bytes of the prefilled JSON.
+  # Specs in these cases are ASCII and compact-encoded by artifacts.config().
+  ctl select-text 0 "${#artifact_current_config}" >/dev/null
+  ctl type "$(jq -Rn --arg value "$1" '$value')" >/dev/null
+  ctl key Enter >/dev/null
+}
+artifact_palette() {
+  local palette_tree
+  ctl palette 'Configure Herd artifacts' >/dev/null
+  for _ in {1..30}; do
+    pump
+    palette_tree=$(ctl tree)
+    # Input values are not result rows. Require the visible command label
+    # outside native input/textarea nodes before pressing Enter exactly once.
+    if jq -e '
+      def label_text($input):
+        ($input or (.tag? == "input") or (.tag? == "textarea")) as $inside
+        | (if $inside then empty else .text? | select(type == "string") end),
+          (.children[]? | label_text($inside));
+      [.tree[]? | label_text(false)] | join(" ")
+      | gsub("[[:space:]]+"; " ") | contains("Configure Herd artifacts")
+    ' <<<"$palette_tree" >/dev/null; then
+      ctl key Enter >/dev/null
+      wait_text 'Artifact specs (JSON array; [] disables)'
+      return
+    fi
+  done
+  echo 'artifact palette command row did not become visible' >&2
+  ctl tree >&2
+  return 1
+}
+artifact_configure() {
+  artifact_palette
+  artifact_submit "$1"
+}
+artifact_config_saved() {
+  local expected kv
+  expected=$1; kv=${KVFILE:?}
+  case "$kv" in "$T"/*) ;; *) echo 'artifact configuration escaped private KV' >&2; return 1 ;; esac
+  wait_text 'Artifact links saved.'
+  jq -e --argjson expected "$expected" '.artifact_specs == $expected' "$kv" >/dev/null
+  artifact_current_config=$(jq -c . <<<"$expected")
+}
+artifact_wait_second() {
+  local label
+  label=$(jq -Rn --arg value "${2:-}" '$value')
+  wait_lua "assert(artifact_second and cx.session:pane(artifact_second)); local root = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main; local a = root.p.herd_artifacts; assert(root.p.herd_cursor == 't81' and a.address == 't81' and a.at ~= nil and not a.loading and not a.waiting and #a.matches == $1 and #a.specs == $1); if $1 > 0 then assert(a.specs[1].label == $label and a.matches[1].label == $label and a.matches[1].path) end"
+}
+artifact_review_selection() {
+  ctl key j >/dev/null
+  artifact_wait t82 3
+  ctl key Home >/dev/null
+  artifact_wait t81 3
+  local path
+  path=$(jq -Rn --arg value "$T/artifacts/.scratch/$1" '$value')
+  check_lua "${artifact_root}assert(not a.error and a.matches[2].path == $path)"
+  artifact_open 2 ".scratch/$1" "$2"
+}
+artifact_wait_marker() {
+  local marker=$1
+  for _ in {1..40}; do
+    [ ! -f "$marker" ] || return 0
+    sleep 0.025
+    ctl wait 50 >/dev/null
+  done
+  echo "artifact discovery barrier did not arrive: $marker" >&2
+  return 1
+}
+
 case "$ACTION_CASE" in
+  artifact-open)
+    artifact_initialize
+    artifact_open 1 .scratch/report.md '# Fictional cart report'
+    artifact_open 2 .scratch/review-001.md '# Fictional review 001'
+    artifact_open 3 .scratch/brief.md '# Fictional cart brief'
+    [ "$(artifact_find_count)" -eq 1 ]
+    artifact_no_documents
+    echo 'artifacts: real Report/Brief and newest-mtime Review open as native file panes with exact private paths and content; only the selected cwd was scanned'
+    ;;
+  artifact-mtime)
+    artifact_initialize
+    review001=$T/artifacts/.scratch/review-001.md
+    review999=$T/artifacts/.scratch/review-999.md
+    second=$(date +%s)
+    touch -d "@$second.000000001" "$review001"
+    touch -d "@$second.000000002" "$review999"
+    [ "$(stat -c %Y "$review001")" = "$second" ]
+    [ "$(stat -c %Y "$review999")" = "$second" ]
+    [[ "$(stat -c %y "$review001")" == *".000000001 "* ]]
+    [[ "$(stat -c %y "$review999")" == *".000000002 "* ]]
+    artifact_review_selection review-999.md '# Fictional review 999'
+    touch -d "@$second.000000003" "$review001"
+    [[ "$(stat -c %y "$review001")" == *".000000003 "* ]]
+    artifact_review_selection review-001.md '# Fictional review 001'
+    touch -r "$review001" "$review999"
+    [ "$(stat -c %y "$review001")" = "$(stat -c %y "$review999")" ]
+    artifact_review_selection review-001.md '# Fictional review 001'
+    # GNU find emits signed floor-seconds and a positive fractional field.
+    # Verify real filesystem support before exercising pre-epoch nanoseconds.
+    if touch -d '@-0.500000001' "$review001" &&
+       touch -d '@-0.500000000' "$review999" &&
+       [ "$(stat -c %Y "$review001")" = -1 ] &&
+       [ "$(stat -c %Y "$review999")" = -1 ] &&
+       [[ "$(stat -c %y "$review001")" == *".499999999 "* ]] &&
+       [[ "$(stat -c %y "$review999")" == *".500000000 "* ]]; then
+      artifact_review_selection review-999.md '# Fictional review 999'
+      echo 'artifact mtime: real negative-epoch timestamps differing by one nanosecond choose review-999'
+    else
+      echo 'artifact mtime: SKIP negative epoch; private filesystem/GNU touch cannot preserve the required timestamps'
+    fi
+    artifact_no_documents
+    echo 'artifact mtime: actual current-epoch 1ns ordering selects review-999 then review-001; equal timestamps choose lexical review-001 through genuine rescans and native document reads'
+    ;;
+  artifact-missing-remote)
+    artifact_initialize
+    ctl key j >/dev/null
+    artifact_wait t82 3
+    check_lua "${artifact_root}assert(not a.error); for _, match in a.matches do assert(not match.path) end"
+    artifact_buttons 3 'No matching local file'
+    artifact_event artifact=1
+    wait_text 'No current local artifact is available for this selection.'
+    artifact_no_documents
+    ctl key m >/dev/null
+    wait_text 'Toasts muted.'
+    ctl key End >/dev/null
+    artifact_wait build-box/t83 0
+    check_lua "${artifact_root}assert(a.error == 'Artifacts open for local hc terminals only.')"
+    [ "$(artifact_find_count)" -eq 1 ]
+    artifact_event artifact=1
+    wait_text 'No current local artifact is available for this selection.'
+    artifact_no_documents
+    echo 'artifacts: missing files have no paths and cannot open; remote hc selection performs zero discovery and opens no document'
+    ;;
+  artifact-config)
+    artifact_initialize
+    check_lua "artifact_second = cx:new_block('herd.herd',nil,'beside'); assert(artifact_second)"
+    artifact_wait_second 3 Report
+    check_lua "${artifact_root}artifact_first_epoch = root.p.herd_selection; artifact_second_epoch = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main.p.herd_selection; artifact_config_focus = cx.session:focused()"
+    custom='[{"label":"Checklist","path":".scratch/brief.md"}]'
+    artifact_configure "$custom"
+    artifact_config_saved "$custom"
+    wait_lua "${artifact_root}local second = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main.p; assert(root.p.herd_selection > artifact_first_epoch and second.herd_selection > artifact_second_epoch and cx.session:focused() == artifact_config_focus)"
+    artifact_wait t81 1
+    artifact_wait_second 1 Checklist
+    check_lua "${artifact_root}assert(a.matches[1].label == 'Checklist' and a.matches[1].path == $(jq -Rn --arg value "$T/artifacts/.scratch/brief.md" '$value'))"
+    artifact_open 1 .scratch/brief.md '# Fictional cart brief'
+    check_lua "${artifact_root}artifact_before_reload_at = a.at"
+    ctl plugins fixtures >/dev/null
+    wait_lua "${artifact_root}assert(a.specs[1].label == 'Checklist' and a.at and a.at > artifact_before_reload_at)"
+    artifact_wait t81 1
+    artifact_wait_second 1 Checklist
+    check_lua "${artifact_root}assert(#a.specs == 1 and a.matches[1].label == 'Checklist')"
+    artifact_configure '[{"label":"Escape","path":"../secret.md"}]'
+    wait_text "Artifact paths must be relative, without '..'"
+    jq -e --argjson expected "$custom" '.artifact_specs == $expected' "${KVFILE:?}" >/dev/null
+    check_lua "${artifact_root}assert(#a.specs == 1 and a.specs[1].label == 'Checklist' and a.matches[1].label == 'Checklist')"
+    artifact_wait_second 1 Checklist
+    artifact_configure '{}'
+    wait_text 'Artifact specs must be an array'
+    jq -e --argjson expected "$custom" '.artifact_specs == $expected' "${KVFILE:?}" >/dev/null
+    check_lua "${artifact_root}assert(#a.specs == 1 and a.specs[1].label == 'Checklist' and a.matches[1].label == 'Checklist')"
+    artifact_wait_second 1 Checklist
+    before_disable=$(artifact_find_count)
+    check_lua "${artifact_root}artifact_first_epoch = root.p.herd_selection; artifact_second_epoch = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main.p.herd_selection; artifact_config_focus = cx.session:focused()"
+    artifact_configure '[]'
+    artifact_config_saved '[]'
+    wait_lua "${artifact_root}local second = cx.session:surface(artifact_second,{root='main',depth=0,nodes=1}).main.p; assert(root.p.herd_selection > artifact_first_epoch and second.herd_selection > artifact_second_epoch and cx.session:focused() == artifact_config_focus)"
+    artifact_wait t81 0
+    artifact_wait_second 0
+    check_lua "${artifact_root}assert(#a.specs == 0 and not a.error)"
+    artifact_buttons 0
+    artifact_event artifact=1
+    wait_text 'No current local artifact is available for this selection.'
+    artifact_no_documents
+    [ "$(artifact_find_count)" -eq "$before_disable" ]
+    check_lua "${artifact_root}artifact_before_reload_at = a.at"
+    ctl plugins fixtures >/dev/null
+    wait_lua "${artifact_root}assert(#a.specs == 0 and a.at and a.at > artifact_before_reload_at)"
+    artifact_wait t81 0
+    artifact_wait_second 0
+    artifact_buttons 0
+    [ "$(artifact_find_count)" -eq "$before_disable" ]
+    artifact_no_documents
+    echo 'artifacts: native global preferences refresh both live consoles without changing focus; custom config survives reload, invalid paths/{} preserve KV, and [] persists with zero discovery or opens'
+    ;;
+  artifact-config-closed)
+    artifact_initialize
+    check_lua 'cx.layout:close(artifact_source)'
+    check_lua "for _, pane in cx.session:panes() do assert(pane.block ~= 'herd.herd' and pane.block ~= 'plugin.herd.herd', 'configuration must start without a Herd pane') end"
+    artifact_palette
+    custom='[{"label":"Summary","path":".scratch/report.md"}]'
+    artifact_submit "$custom"
+    artifact_config_saved "$custom"
+    check_lua "for _, pane in cx.session:panes() do assert(pane.block ~= 'herd.herd' and pane.block ~= 'plugin.herd.herd', 'global configuration created a Herd pane') end"
+    ctl plugins run plugin.herd.open >/dev/null
+    wait_lua "${probe}artifact_source = p; local n = 0; for _, pane in cx.session:panes() do if pane.block == 'herd.herd' or pane.block == 'plugin.herd.herd' then n += 1 end end; assert(n == 1)"
+    artifact_wait t81 1
+    artifact_open 1 .scratch/report.md '# Fictional cart report'
+    check_lua "${artifact_root}artifact_before_reload_at = a.at"
+    ctl plugins fixtures >/dev/null
+    wait_lua "${artifact_root}assert(a.specs[1].label == 'Summary' and a.at and a.at > artifact_before_reload_at)"
+    artifact_wait t81 1
+    if ctl tree | grep -Fq 'Artifact specs (JSON array; [] disables)'; then
+      echo 'global artifact preferences prompt reopened after fixture reload' >&2
+      return 1
+    fi
+    artifact_no_documents
+    echo 'artifacts: global preferences save with zero Herd panes; a separately opened console uses Summary, and fixture reload does not reopen preferences'
+    ;;
+  artifact-stale)
+    artifact_initialize
+    ctl key j >/dev/null
+    artifact_wait t82 3
+    rm -f "$T/state/find.started" "$T/state/find.completed"
+    touch "$T/state/find.hold"
+    ctl key Home >/dev/null
+    artifact_wait_marker "$T/state/find.started"
+    check_lua "${artifact_root}assert(root.p.herd_cursor == 't81' and a.loading); artifact_held_epoch = root.p.herd_selection"
+    ctl key j >/dev/null
+    wait_cursor t82 artifact_source
+    check_lua "${artifact_root}assert(a.address == 't82' and root.p.herd_selection > artifact_held_epoch); for _, match in a.matches do assert(not match.path) end"
+    touch "$T/state/find.release"
+    artifact_wait_marker "$T/state/find.completed"
+    artifact_wait t82 3
+    check_lua "${artifact_root}assert(not a.error); for _, match in a.matches do assert(not match.path) end"
+    [ "$(artifact_find_count)" -eq 2 ]
+    artifact_event artifact=1
+    wait_text 'No current local artifact is available for this selection.'
+    artifact_no_documents
+    echo 'artifacts: a held real GNU find completes only after selection changes; its stale paths never replace the missing-file selection or open a document'
+    ;;
   watch|doubleclick|attach|watch-unfocused|doubleclick-unfocused)
     before=$(ctl state | jq '[.tabs[].panes] | add')
     limit=400; steps=12

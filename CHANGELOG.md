@@ -23,6 +23,10 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
   explicit Float Watch (`p`), Dock Watch (`d`) and Park Watch (`z`) controls
   arrange that view without stopping its hc terminal. Writable Attach remains
   a separate new split.
+- Configurable local artifact links on the selected card: Report, newest-by-mtime
+  Review (with exact subsecond ordering) and Brief by default, with native document
+  opening and selected-only, debounced discovery. Global palette preferences work
+  without opening a console. Remote hc and remote/unknown Tern source paths are refused.
 
 ### Changed
 

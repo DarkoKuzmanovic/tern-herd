@@ -1,0 +1,9 @@
+{
+  "hidden_finished": 0,
+  "machines": [],
+  "terminals": [
+    {"address":"t81","agent":"codex","cwd":"/home/alex/code/shop","name":"b1-cart","state":"live","status":"done","turn":4,"where":"shop / cart"},
+    {"address":"t82","agent":"codex","cwd":"/home/alex/code/shop/.worktrees/checkout","name":"b2-checkout","state":"live","status":"working","turn":2,"where":"shop / checkout"},
+    {"address":"build-box/t83","agent":"codex","cwd":"/home/alex/code/shop","name":"b3-remote","state":"live","status":"done","turn":3,"where":"shop / remote"}
+  ]
+}

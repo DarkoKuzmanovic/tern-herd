@@ -17,6 +17,7 @@ stop an agent.
 | `plugins/herd/common.luau` | Shared constants, the single `M.HC` candidate list, quoting and links |
 | `plugins/herd/activity.luau` | Shared capped metadata ledger, transition deduplication and read state |
 | `plugins/herd/viewers.luau` | Bounded pane-id registry for read-only/writable viewers and verified host/session ownership |
+| `plugins/herd/artifacts.luau` | Validated relative artifact specs and bounded actual-mtime GNU find discovery |
 | `plugins/herd/herd.css` | Scoped responsive layout |
 | `plugins/herd/README.md` | Full behavior and limits |
 | `test/shoot.sh`, `test/bin/hc` | Isolated headless screenshot runner and fake command |

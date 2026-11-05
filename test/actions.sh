@@ -28,6 +28,9 @@ done
 for action in activity-events activity-persistence activity-shared-scopes activity-scope-order; do
   SHOOT_PHASED=1 run_case "$action" activity
 done
+for action in artifact-open artifact-mtime artifact-missing-remote artifact-config artifact-config-closed artifact-stale; do
+  SHOOT_ARTIFACTS=1 run_case "$action" artifacts
+done
 # Both native shell recording and PATH interception must fail closed.
 if SHOOT_HOOK='"$TERNFD" ctl --control "$SOCK" open-url external-test://not-handled' \
   "$TEST/shoot.sh" activation; then
@@ -38,4 +41,4 @@ if SHOOT_HOOK='"$T/bin/xdg-open" https://example.invalid' "$TEST/shoot.sh" activ
   echo 'actions: FAIL: executable opener escaped the guard' >&2
   exit 1
 fi
-echo 'actions: all action, viewer, scope, needs-you navigation, activity, arbitration, expiry, reload and opener-guard checks passed'
+echo 'actions: all action, viewer, scope, needs-you navigation, activity, artifact, arbitration, expiry, reload and opener-guard checks passed'
