@@ -1,0 +1,28 @@
+{
+  "address": "t72",
+  "argv": [
+    "codex",
+    "--no-daemon",
+    "-a",
+    "never",
+    "-s",
+    "workspace-write"
+  ],
+  "cols": 160,
+  "rows": 48,
+  "created_ms": 1793865601000,
+  "cwd": "/home/alex/code/shop/.worktrees/checkout-layout",
+  "name": "b2-checkout",
+  "labels": {
+    "run": "activity",
+    "branch": "checkout-layout",
+    "where": "shop / 1"
+  },
+  "state": "finished",
+  "status": null,
+  "turn": 7,
+  "title": "Checkout layout",
+  "exit_code": 7,
+  "finished_ms": 1793865902000,
+  "reason": "exited"
+}

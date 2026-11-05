@@ -19,7 +19,7 @@ cd ~/code/tern-herd
 ./test/shoot.sh --keys "sleep:7000" transitions             # later `ls` answers from seq/ (real time)
 ./test/shoot.sh --keys "Enter sleep:1500" demo           # watch split: the fake attach banner
 ./test/shoot.sh --keys "dblclick:.sf-tbl-row.sel" activation
-./test/actions.sh                                      # actions, run scopes, needs-you navigation, arbitration and opener guard
+./test/actions.sh                                      # actions, scopes, needs-you, activity, arbitration and opener guard
 ```
 
 | option | meaning |
@@ -27,11 +27,12 @@ cd ~/code/tern-herd
 | `--size WxH` | viewport in CSS px (`resize W H`), e.g. `700x900`. Default: the serve's own, 1280x800 |
 | `--keys "TOKEN …"` | `tern ctl key` tokens, `dblclick:CSS` selectors, or pause tokens `wait:MS` / `sleep:MS` (below); selectors cannot contain spaces |
 | `SHOOT_KEEP=1` | keep the run's temp dir and leave the serve running (it prints the control socket); stop it yourself |
-| `SHOOT_HOOK='…'` | run a strict shell snippet after the fake-hc assertion, with `$TEST`, `$T` (temp dir), `$SOCK` (control socket) and `$TERNFD` (the `tern` binary) set; failure fails the run |
+| `SHOOT_HOOK='…'` | run a strict shell snippet after the fake-hc assertion, with `$TEST`, `$T` (temp dir), `$SOCK` (control socket), `$TERNFD` (the `tern` binary) and `$KVFILE` (the already validated private plugin-storage file) set; failure fails the run |
 | `SHOOT_PLUGIN_DIR=DIR` | test a private plugin working copy instead of the linked source |
 | `SHOOT_CONTENDER=1` | load a second independent copy of the production window VM against the same host requests |
 | `SHOOT_NO_CONSUMER=1` | load a bootstrap-only window half; no action consumer, for expiry and manual claim tests |
 | `SHOOT_WORKTREE=1` | replace fixture cwd values in the temporary copy with a new private git repository for `w` |
+| `SHOOT_PHASED=1` | copy the fixture privately before starting Tern, park `seq/` as `phases/`, and hold phase 01 until a hook atomically promotes another snapshot; never edits repository fixtures |
 
 ### `sleep:MS` vs `wait:MS`
 
@@ -80,7 +81,7 @@ every run gets its own everything:
   reach the live daemon (and the serve's window isn't reachable from them
   either — that is why the harness drives it through `ctl`);
 - its own `TERN_CONFIG_DIR`, `XDG_STATE_HOME`, `XDG_DATA_HOME`,
-  `XDG_CACHE_HOME` under `<tmp>`, so `tern.kv` (`hc_path`, `summary`) written by
+  `XDG_CACHE_HOME` under `<tmp>`, so `tern.kv` (`hc_path`, scope state, activity) written by
   the block lands in the run's state, never in `~/.local/state/tern/plugin-data`;
 - `STENCIL_FIXTURE_ROOT=<tmp>/crates/tern`, so the plugin is loaded from the
   run's copy of `plugins/herd`, not the linked one;
@@ -238,7 +239,7 @@ Shipped fixtures:
 | fixture | shows |
 | --- | --- |
 | `demo` | the live herd's shape: `t1n` (hermes) and 8 codex builders in worktrees, working/blocked/done/idle + a plain `zsh` row with no status, `hidden_finished: 21`, `build-box` unreachable |
-| `empty` | no terminals, 5 finished hidden |
+| `empty` | no live terminals; `ls-all.json` contains 5 already-finished fictional gates, hidden by default and visible with `h`, establishing history baselines without unread events |
 | `error` | `hc ls` exits 3: the "can't list" card with hc's message |
 | `deep` | 43 rows, 3 levels (lead → sub-lead → workers), a second root, standalone shells, an orphan whose parent isn't listed, very long names and worktree paths — the table has to scroll |
 | `transitions` | `seq/01…04`: builders working → blocked → done, one finishing (`state: finished`) |
@@ -246,6 +247,7 @@ Shipped fixtures:
 | `remote` | the live herd plus a terminal on another machine, `build-box/t10` (address with a `/`, agent `bash`, cwd `/home/alex`, **no status**), and `machines[]` reporting `build-box` unreachable with `why`; `t43 b9-drafts` working. Its `get` takes `get/build-box/t10.delay` 12 s then `get/build-box/t10.exit` 1 + a `cannot reach build-box` error JSON, so the selected remote row's card shows the load, then `hc get timed out after 10 s.` |
 | `activation` | fictional `spam-192` at `t44`, plus `cart #2 (review/ready)` at `build-box/t45`; action regression data, not a live terminal |
 | `scopes` | All terminals contains `b1-cart` working, `b2-checkout` blocked and `b3-review` error; `scopes/cart/` contains only the cart builder and `scopes/checkout/` only checkout. Cart details are at the fixture root, checkout details are in its scope, and review's selected-card reply is delayed 2 s for scope-switch regression coverage |
+| `activity` | baseline `t70` already finished plus four working builders; phase 02 blocks `t71`, finishes nonselected `t72` with exit 7, completes `t73`, and removes `t74`; phase 03 resumes `t71`, phase 04 completes it. Expected activity counts: 0 → 3 → 3 → 4 |
 
 Fake data is modelled on the real thing: `hc ls --json` is
 `{hidden_finished, machines:[{name,since_ms,state,why}], terminals:[{address,agent,cwd,state,status,turn,where,name?,parent?}]}`
@@ -345,6 +347,16 @@ not merely a notice or highlight:
 - With no console, `plugin.herd.scope` opens a console and its real run picker.
   Choosing cart changes the rows; reloading preserves cart without reopening
   that launch picker or issuing another run-discovery request.
+  That cold-scope case alone enables `SHOOT_SCOPE_OPEN_DRAIN=1`: its private
+  window copy appends a harness-only command calling the existing production
+  `wake_requests` callback, which UI waits explicitly invoke after fake-hc
+  isolation is validated. Matched main/branch native cold-open/watch probes
+  both reached a claimed but unacknowledged request after 1.4 seconds; the
+  independent window VM did not reliably dispatch its callbacks. The adapter
+  does not fake claims, acknowledgements, picker results or scope changes.
+  Natural desktop wakeup and cold-open latency are **not verified** by this
+  case. All other action/latency checks retain native timers; no-consumer and
+  contender cases neither install nor invoke this adapter.
 - A burst of 48 production `herd_next=1/-1` events immediately after a normal
   host poll adds no `hc ls` or full-list discovery call. The observation must
   finish before the next normal two-second timer; a slow observation fails
@@ -354,6 +366,65 @@ Every navigation case rejects fake `send`, `interrupt` or `attach` calls and
 retains the native/PATH external-opener guard. Selected-row detail `get`s and
 normal background list polling are allowed; navigation never opens a viewer or
 sends terminal input.
+
+Activity cases use the **real production observation/event path**, not stubbed
+ledger replies. They run `shoot.sh` with `SHOOT_PHASED=1`: the source fixture
+is copied to `<tmp>/fixture`, its `seq/` is renamed `phases/` before the first
+list, and phase 01 initializes `ls-all.json`. The hook atomically promotes
+complete snapshots and requests a normal production Refresh, waiting for
+surface/summary barriers. Extra timer polls therefore repeat the current
+phase rather than consuming a transition early. The private copy also
+contains cart/checkout datasets for scoped observations; the source fixture
+never changes during a test.
+
+- `activity-events` asserts the old finished terminal establishes a baseline
+  with no event; blocked, done and a **nonselected finish with exit 7** are
+  recorded even while `h` hides finished rows. A disappeared terminal never
+  becomes a guessed finish. Repeating/resuming snapshots does not add events;
+  working → done/idle and error transitions do. `h` changes presentation only:
+  every production list still has `--all`, and there is no per-row `get`
+  sweep. `v`, Escape and the head/back host actions open/close the inbox
+  without marking read. Root `herd_activity`, `herd_unread`, `herd_inbox` and
+  `herd_summary.unread` agree with metadata-only entries; unread keeps the
+  native status segment visible after the last active terminal disappears.
+- `activity-persistence` explicitly marks read, observes another event, and
+  reloads the production plugin to assert the same IDs/read markers remain.
+  It inspects only the private persisted ledger for forbidden terminal
+  content fields. Clear must preserve persisted observation baselines;
+  reloading identical blocked and error snapshots uses nonzero summary
+  completion barriers to ensure cleared attention events never reappear.
+- `activity-shared-scopes` creates two production consoles, mutes the first,
+  and checks both still share the same deduplicated event IDs and unread
+  counts. A selected `get`'s cached run label associates older events without
+  claiming unknown run history; scoped observations associate a nonselected
+  finish without fetching its details. Scoped Mark read/Clear resync both
+  consoles without changing unrelated events; an unknown scope is empty.
+  This checks history while muted, not toast delivery instrumentation.
+- `activity-scope-order` holds a genuine scoped `hc ls` reply in this run's
+  pinned wrapper, after recording its invocation and capturing its finished
+  terminal response. Only then does All observe that finish. An All-only
+  working marker terminal proves a newer All response completed before the
+  older scoped response is released. The matching scoped response must still
+  associate the nonselected finish with its run and unread count, without an
+  extra event or detail fetch. The release barrier fails after eight seconds,
+  before the production list timeout; neither sleeps nor synthetic ledger
+  replies establish the ordering.
+
+Run only these cases, still with the ordinary pin/isolation/opener guards:
+
+```sh
+for action in activity-events activity-persistence activity-shared-scopes activity-scope-order; do
+  ACTION_CASE=$action SHOOT_PHASED=1 \
+    SHOOT_HOOK='source "$TEST/actions-hook.sh"' ./test/shoot.sh activity
+done
+```
+
+For an automatic-sequence visual preview instead, use
+`./test/shoot.sh --keys "sleep:7000 v" activity`. This screenshot command is
+not the deterministic regression test: the fake advances `seq/` on every
+list call. Inbox history is observed metadata while consoles poll, not a
+complete terminal audit.
+
 
 `tern serve` is a standalone headless window, not a daemon session to which a
 second real client can attach. The competing-consumer test instead loads a

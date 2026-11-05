@@ -12,13 +12,14 @@ stop an agent.
 | Path | What |
 |---|---|
 | `plugins/herd/plugin.toml` | Manifest: plugin `herd`, block `herd.herd`, release version |
-| `plugins/herd/host.luau` | Polling, tree, details, rendering, guarded send/interrupt |
-| `plugins/herd/window.luau` | Palette command, key binding, routes, splits, dialogs, status segment |
+| `plugins/herd/host.luau` | Polling, tree, details, activity inbox, rendering, guarded send/interrupt |
+| `plugins/herd/window.luau` | Palette commands, key bindings, mailbox actions, splits, dialogs, status segment |
 | `plugins/herd/common.luau` | Shared constants, the single `M.HC` candidate list, quoting and links |
+| `plugins/herd/activity.luau` | Shared capped metadata ledger, transition deduplication and read state |
 | `plugins/herd/herd.css` | Scoped responsive layout |
 | `plugins/herd/README.md` | Full behavior and limits |
 | `test/shoot.sh`, `test/bin/hc` | Isolated headless screenshot runner and fake command |
-| `test/typecheck.sh` | Pinned `luau-lsp analyze` over the three plugin files |
+| `test/typecheck.sh` | Pinned `luau-lsp analyze` over every `plugins/herd/*.luau` module |
 | `.github/workflows/typecheck.yml` | The only CI job: runs `test/typecheck.sh` |
 | `test/fixtures/` | Fictional `hc` replies, output and assertions |
 | `docs/screenshots/` | Reviewed, metadata-stripped screenshots used by the root README |
@@ -78,10 +79,11 @@ scrolling and privacy. See [test/README.md](test/README.md) for interaction scen
 images under 300 KB, strip metadata and include only images the README uses.
 
 `test/typecheck.sh` is the static gate: it downloads luau-lsp 1.70.1 and Tern's pinned
-`tern.d.luau`, verifies both SHA-256 digests and runs `luau-lsp analyze` over the three plugin
-files, so it exits nonzero on any type error. It needs no Tern account or display, and `--defs
+`tern.d.luau`, verifies both SHA-256 digests and runs `luau-lsp analyze` over every
+`plugins/herd/*.luau` module — host, window, common and any helper a feature adds — so it exits
+nonzero on any type error. It needs no Tern account or display, and `--defs
 PATH` checks against a local `tern plugin types DIR` copy instead. Keep the pins in the script and
-the docs in step when either is bumped. It reports drift in `host.luau`/`window.luau` reaching
+the docs in step when either is bumped. It reports drift in a module reaching
 Tern's API with the wrong type; lint warnings alone do not fail it.
 
 Only this static check runs in CI (`.github/workflows/typecheck.yml`). Tern is closed beta and

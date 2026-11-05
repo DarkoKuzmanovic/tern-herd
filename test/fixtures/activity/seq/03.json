@@ -1,0 +1,48 @@
+{
+  "hidden_finished": 0,
+  "machines": [],
+  "terminals": [
+    {
+      "address": "t71",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "name": "b1-cart",
+      "state": "live",
+      "status": "working",
+      "turn": 6,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t72",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/checkout-layout",
+      "name": "b2-checkout",
+      "state": "finished",
+      "turn": 7,
+      "where": "shop / 1",
+      "exit_code": 7,
+      "reason": "exited"
+    },
+    {
+      "address": "t73",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/search-ranking",
+      "name": "b3-search",
+      "state": "live",
+      "status": "done",
+      "turn": 3,
+      "where": "shop / 1"
+    },
+    {
+      "address": "t70",
+      "agent": "codex",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-summary",
+      "name": "b0-summary",
+      "state": "finished",
+      "exit_code": 0,
+      "reason": "exited",
+      "turn": 8,
+      "where": "shop / 1"
+    }
+  ]
+}

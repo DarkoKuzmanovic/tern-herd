@@ -6,6 +6,22 @@ local M = {}
 M.KIND = "herd.herd"
 M.OPEN_ACTION = "plugin.herd.open"
 
+-- Normalized hc list row, shared without per-observation projection copies.
+export type Term = {
+	address: string,
+	name: string?,
+	agent: string,
+	cwd: string,
+	-- Program's 7501 word, or running when no status is reported.
+	status: string,
+	state: string,
+	turn: number?,
+	where: string,
+	parent: string?,
+	exit_code: number?,
+	reason: string?,
+}
+
 -- `hc` by name first, then where it is installed: a daemon started by systemd
 -- or a desktop launcher often has a PATH without ~/.local/bin.
 local home = tern.getenv("HOME")
@@ -20,10 +36,8 @@ for _, path in paths do
 	end
 end
 
--- kv keys both halves read: the hc the host half found, and the latest
--- status counts for the status-line segment.
+-- Shared kv keys for executable resolution and bounded run-scope preferences.
 M.KV_HC = "hc_path"
-M.KV_SUMMARY = "summary"
 M.KV_SCOPES = "recent_scopes"
 M.KV_PANE_SCOPES = "pane_scopes"
 

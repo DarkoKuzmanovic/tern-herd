@@ -12,6 +12,9 @@
 # `--keys` tokens are pressed with `tern ctl key`; two pause tokens exist:
 # `sleep:MS` (real time, so the block's 2 s host poll runs and a seq/ fixture
 # advances) and `wait:MS` (`ctl wait`, the serve's simulated clock only).
+# SHOOT_PHASED=1 copies a seq/ fixture privately, parks seq/ as phases/ and
+# starts at phase 01. Hooks explicitly promote snapshots; idle polls cannot
+# consume a later phase. The source fixture is never changed.
 #
 # Isolated per run: control socket, TERN_DAEMON_SOCKET, TERN_CONFIG_DIR,
 # XDG_STATE_HOME/DATA_HOME/CACHE_HOME, and a fake `hc` first on PATH.
@@ -193,9 +196,30 @@ shoot_one() {
     "$T/xdg/data" "$T/xdg/cache" "$T/config" "$T/shots"
   cp -r "${SHOOT_PLUGIN_DIR:-$REPO/plugins/herd}" "$T/crates/plugins/fixtures/herd"
 
-  if [ -n "${SHOOT_WORKTREE:-}" ]; then
+  if [ -n "${SHOOT_WORKTREE:-}${SHOOT_PHASED:-}" ]; then
     cp -r "$fix" "$T/fixture"
     fix=$T/fixture
+  fi
+  if [ -n "${SHOOT_PHASED:-}" ]; then
+    [ -f "$fix/seq/01.json" ] || { echo "shoot: phased fixture needs seq/01.json" >&2; return 1; }
+    mv "$fix/seq" "$fix/phases"
+    cp "$fix/phases/01.json" "$fix/ls-all.json"
+    jq '.terminals |= map(select(.state != "finished"))' "$fix/ls-all.json" >"$fix/ls.json"
+    # These private datasets exercise both observed scope membership and the
+    # selected get's independent run=activity association.
+    if [ "$scen" = activity ]; then
+      mkdir -p "$fix/scopes/cart" "$fix/scopes/checkout"
+      jq '.terminals |= map(select(.address == "t71" or .address == "t72"))' \
+        "$fix/ls-all.json" >"$fix/scopes/cart/ls-all.json"
+      jq '.terminals |= map(select(.address == "t73"))' \
+        "$fix/ls-all.json" >"$fix/scopes/checkout/ls-all.json"
+      for scope in cart checkout; do
+        jq '.terminals |= map(select(.state != "finished"))' \
+          "$fix/scopes/$scope/ls-all.json" >"$fix/scopes/$scope/ls.json"
+      done
+    fi
+  fi
+  if [ -n "${SHOOT_WORKTREE:-}" ]; then
     mkdir -p "$T/worktree"
     git -C "$T/worktree" init -q
     while IFS= read -r -d '' file; do
@@ -228,6 +252,20 @@ shoot_one() {
     cp "$T/crates/plugins/fixtures/herd/"{window,common}.luau "$T/crates/plugins/fixtures/contender/"
     printf '%s\n' 'schema = 1' 'id = "herd-contender"' 'name = "Test contender"' \
       'version = "0.0.0"' 'window = "window.luau"' >"$T/crates/plugins/fixtures/contender/plugin.toml"
+  fi
+
+  # A/B native cold-open/watch probes starve the independent window VM on
+  # both main and this branch. Only the cold-scope regression may explicitly
+  # drain the unchanged production consumer; ordinary action gates stay native.
+  if [ "${SHOOT_SCOPE_OPEN_DRAIN:-0}" = 1 ]; then
+    if [ "${ACTION_CASE:-}" != scope-open ] || [ -n "${SHOOT_NO_CONSUMER:-}${SHOOT_CONTENDER:-}" ]; then
+      echo "shoot: cold-scope drain requires scope-open with one real consumer" >&2
+      return 1
+    fi
+    printf '\n%s\n' \
+      '-- herd-shoot: cold-scope-only headless driver, never shipped' \
+      'tern.command({ id = "harness_drain", title = "Harness: drain cold-scope request", run = function(cx) wake_requests(nil, cx) end })' \
+      >>"$T/crates/plugins/fixtures/herd/window.luau"
   fi
 
   # No desktop opener may escape this isolated process. Headless Tern also
@@ -357,7 +395,7 @@ shoot_one() {
 
   # Hooks may drive only this run, and only after fake-hc isolation is proven.
   if [ -n "${SHOOT_HOOK:-}" ]; then
-    if ! TEST=$TEST T=$T SOCK=$sock TERNFD=$TERN bash -euo pipefail -c "$SHOOT_HOOK" >"$T/hook.out" 2>&1; then
+    if ! TEST=$TEST T=$T SOCK=$sock TERNFD=$TERN KVFILE=$kvfile bash -euo pipefail -c "$SHOOT_HOOK" >"$T/hook.out" 2>&1; then
       sed 's/^/  hook: /' "$T/hook.out" >&2
       return 1
     fi

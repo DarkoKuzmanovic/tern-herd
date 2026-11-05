@@ -1,0 +1,32 @@
+{
+  "address": "t71",
+  "argv": [
+    "codex",
+    "--no-daemon",
+    "-a",
+    "never",
+    "-s",
+    "workspace-write"
+  ],
+  "cols": 160,
+  "rows": 48,
+  "created_ms": 1793865600000,
+  "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+  "name": "b1-cart",
+  "labels": {
+    "run": "activity",
+    "branch": "cart-totals",
+    "where": "shop / 1"
+  },
+  "state": "live",
+  "status": {
+    "app": "codex",
+    "state": "working"
+  },
+  "status_ms": 1793865900000,
+  "turn": 4,
+  "title": "Cart totals",
+  "exit_code": null,
+  "finished_ms": null,
+  "reason": null
+}

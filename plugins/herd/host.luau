@@ -1,5 +1,5 @@
 --!strict
--- The `herd` block: herdr-core's terminals and agents (`hc ls --json`) as
+-- The `herd` block: herdr-core's terminals and agents (`hc ls --json --all`) as
 -- one page: a head row, four run facts the tabs don't count (machines,
 -- worktrees, turns, finished), filter tabs (All, Needs you, Working, Done),
 -- the terminal tree at full width and the selected terminal's card beside it
@@ -9,10 +9,10 @@
 -- Enter (or o) watches the terminal in a split (`hc attach --observe`),
 -- a attaches to type into it, l reads its last 40 lines once, s sends a
 -- prompt, x interrupts, w opens its worktree in a git block, f focuses the
--- selected terminal's subtree, h shows finished terminals (`hc ls --all`),
+-- selected terminal's subtree, h shows finished terminals,
 -- m mutes the toasts, r refreshes now, [/] select previous/next needs-you,
--- Esc closes the logs, then the focus.
--- Only s and x change anything, and the window half asks before either.
+-- v opens the activity inbox; Esc closes the inbox, logs, then the focus.
+-- Only s and x change terminals, and the window half asks before either.
 --
 -- Window-only work travels as inert surface metadata. Windows claim a
 -- request through an event; this serial worker grants it to just one.
@@ -24,6 +24,7 @@
 -- never starts a process.
 
 local common = require("./common")
+local activity = require("./activity")
 local ui = tern.ui
 
 local POLL_MS = 2000
@@ -89,21 +90,13 @@ local FILTER_LABEL: { [string]: string } = {
 	done = "Done",
 }
 
-type Term = {
-	address: string,
-	name: string?,
-	agent: string,
-	cwd: string,
-	-- The program's 7501 word (working, blocked, done, idle, error), or
-	-- `running` for a plain program that never reports one.
-	status: string,
-	state: string,
-	turn: number?,
-	where: string,
-	parent: string?,
-	exit_code: number?,
-	reason: string?,
+-- Inbox keys are deliberately limited to visible controls and needs navigation.
+local INBOX_KEYS: { [string]: boolean } = {
+	v = true, r = true, m = true, u = true, h = true,
+	["]"] = true, ["["] = true, escape = true,
 }
+
+type Term = common.Term
 
 -- A table row: the terminal, its depth and its tree connectors.
 type Row = { t: Term, depth: number, prefix: string }
@@ -155,7 +148,9 @@ type Counts = { [string]: number }
 type State = {
 	cx: BlockCx,
 	run: string?,
+	scopes: { string },
 	terms: { Term }?,
+	observed: { Term }?,
 	by_addr: { [string]: Term },
 	kids: { [string]: { string } },
 	rows: { Row },
@@ -177,8 +172,10 @@ type State = {
 	finished: boolean,
 	muted: boolean,
 	seen: { [string]: Seen },
-	baseline: boolean,
-	toasted: { [string]: string },
+	inbox: boolean,
+	activity: { activity.Event },
+	unread: number,
+	activity_problem: string?,
 	details: { [string]: Detail },
 	detail_timer: TimerHandle?,
 	detail_busy: boolean,
@@ -195,9 +192,8 @@ type State = {
 -- A pane id survives a block restart; the state object identifies this run.
 local running: { [number]: State } = {}
 
--- The hc that last started, and what the kv store last heard.
+-- The hc that last started.
 local hc_path: string? = nil
-local last_summary: { [number]: string } = {}
 local request_serial = 0
 
 local function str(v: any): string?
@@ -239,8 +235,6 @@ local function retire(state: State)
 	if running[state.cx.pane] == state then
 		running[state.cx.pane] = nil
 	end
-	last_summary[state.cx.pane] = nil
-	pcall(tern.kv.set, common.KV_SUMMARY .. ":" .. state.cx.pane, nil)
 	if state.timer then
 		state.timer:cancel()
 		state.timer = nil
@@ -634,21 +628,17 @@ local function counts(state: State): Counts
 	return c
 end
 
--- The status line's counts, for the window half; written only on change.
--- While hc fails the counts are unknown, so the segment goes away.
-local function publish(state: State)
-	local c: Counts = if state.problem and not state.terms then {} else counts(state)
-	local summary = {
-		working = c.working or 0,
-		blocked = c.blocked or 0,
-		errors = c.error or 0,
-		run = state.run or "",
-		pane = state.cx.pane,
-	}
-	local text = tern.json.encode(summary)
-	if text ~= last_summary[state.cx.pane] then
-		last_summary[state.cx.pane] = text
-		pcall(tern.kv.set, common.KV_SUMMARY .. ":" .. state.cx.pane, summary)
+-- Ledger reads/writes happen in callbacks, never in view/title formatters.
+-- Every console caches its own scope's history; a read/clear is shared.
+local function sync_activity()
+	for _, state in running do
+		if alive(state) then
+			state.scopes = recent_scopes()
+			state.activity = activity.list(state.run)
+			state.unread = activity.unread(state.run)
+			state.activity_problem = activity.status()
+			state.cx:render()
+		end
 	end
 end
 
@@ -678,6 +668,10 @@ local function fetch_detail(state: State, address: string)
 			if info then
 				entry.info = info
 				remember_scope(info.run)
+				if info.run then
+					activity.note_run(address, info.run)
+					sync_activity()
+				end
 				entry.error = nil
 			else
 				entry.error = "hc get printed something other than a terminal."
@@ -764,6 +758,7 @@ local function next_needs(state: State, step: number): boolean
 	for offset = 1, #ordered do
 		local row = ordered[(at - 1 + step * offset) % #ordered + 1]
 		if matches("needs", row.t) then
+			state.inbox = false
 			state.subtree = nil
 			state.filter = "needs"
 			set_cursor(state, row.t.address, 1)
@@ -779,161 +774,132 @@ local function next_needs(state: State, step: number): boolean
 	return false
 end
 
--- A toast for a status change the person may not be looking at. Tern's
--- toasts are success, info or error only, so blocked is an info toast (the
--- table still draws it in the warning tone).
-local function announce(state: State, t: Term, from: string?, to: string)
-	if state.muted or state.toasted[t.address] == to then
-		return
-	end
-	local name = short_of(t)
-	local level: ToastLevel? = nil
-	local text = ""
-	if to == "blocked" then
-		level, text = "info", name .. " is blocked"
-	elseif to == "error" then
-		level, text = "error", name .. " reported an error"
-	elseif to == "finished" then
-		local code = t.exit_code
-		level = if code == nil or code == 0 then "success" else "error"
-		text = name .. " finished" .. (if code then " (exit " .. code .. ")" else "")
-	elseif from == "working" and to == "done" then
-		level, text = "success", name .. " is done"
-	elseif from == "working" and to == "idle" then
-		level, text = "info", name .. " is idle"
-	end
-	if level then
-		state.toasted[t.address] = to
-		state.cx:toast(level :: ToastLevel, text, if t.cwd ~= "" then tilde(t.cwd) else nil)
-	end
-end
-
--- The selected terminal left `hc ls` (which hides finished ones unless h is
--- on): one `hc get` says whether it finished, so the person hears it.
-local function probe_gone(state: State, t: Term, was_live: boolean)
-	local label = label_of(t)
-	local epoch = state.scope_epoch
-	local spawn_error = run_hc({ "get", t.address, "--json" }, GET_TIMEOUT_MS, function(result)
-		if not alive(state) or state.scope_epoch ~= epoch then
-			return
-		end
-		local info = if result.status == 0 then parse_info(result.stdout) else nil
-		if info and info.state == "finished" then
-			local code = info.exit_code
-			local tail = if state.finished then "" else "  h shows finished terminals."
-			set_notice(
-				state,
-				label .. " finished" .. (if code then " with exit " .. code else "") .. "." .. tail,
-				if code == nil or code == 0 then "success" else "error"
-			)
-			if was_live then
-				local done: Term = table.clone(t)
-				done.state = "finished"
-				done.exit_code = code
-				announce(state, done, t.status, "finished")
+-- Only newly added ledger events toast, once globally even when several
+-- consoles observe the same transition. Prefer any alive, unmuted relevant
+-- console, not necessarily the observer that happened to finish its poll first.
+local function announce(events: { activity.Event })
+	for _, event in events do
+		local recipient: State? = nil
+		local terminal: Term? = nil
+		for _, candidate in running do
+			if not candidate.muted and alive(candidate) then
+				local relevant = candidate.run == nil or table.find(event.runs, candidate.run :: string) ~= nil
+				local observed: { Term } = candidate.observed or {}
+				for _, t in observed do
+					if t.address == event.address then
+						terminal = t
+						relevant = true
+						break
+					end
+				end
+				if relevant and (recipient == nil or candidate.cx.pane < recipient.cx.pane) then
+					recipient = candidate
+				end
 			end
-		else
-			set_notice(state, label .. " left the list.", "muted")
 		end
-		state.cx:render()
-	end)
-	if spawn_error then
-		set_notice(state, label .. " left the list.", "muted")
+		if recipient == nil then continue end
+		local name = event.name or event.address
+		local to = event.status
+		local level: ToastLevel = "info"
+		local text = name .. " is " .. to
+		if to == "blocked" then
+			text = name .. " is blocked"
+		elseif to == "error" then
+			level, text = "error", name .. " reported an error"
+		elseif to == "finished" then
+			local code = event.exit_code
+			level = if code == nil or code == 0 then "success" else "error"
+			text = name .. " finished" .. (if code then " (exit " .. code .. ")" else "")
+		elseif to == "done" then
+			level = "success"
+		end
+		recipient.cx:toast(level, text, if terminal and terminal.cwd ~= "" then tilde(terminal.cwd) else nil)
 	end
 end
 
--- Takes a new `hc ls` list: status changes since the last one (toasts after
--- the first list), the parent index, the rows.
-local function apply(state: State, terms: { Term }, hidden: number, machines: { Machine }, remotes: number)
-	local rebase = not state.baseline
-	local now = os.time()
+-- Finished visibility is presentation only. The full snapshot drives status
+-- ages and history, including non-selected finishes while h is off.
+local function present(state: State)
+	local terms: { Term } = {}
 	local by: { [string]: Term } = {}
-	for _, t in terms do
-		by[t.address] = t
+	local hidden = 0
+	local observed: { Term } = state.observed or {}
+	for _, t in observed do
+		if t.state == "finished" and not state.finished then
+			hidden += 1
+		else
+			table.insert(terms, t)
+			by[t.address] = t
+		end
 	end
 	local kids: { [string]: { string } } = {}
-	local seen: { [string]: Seen } = {}
-	local toasted: { [string]: string } = {}
 	for _, t in terms do
-		local p = t.parent
-		if p and p ~= t.address and by[p] then
-			local k = kids[p] or {}
-			table.insert(k, t.address)
-			kids[p] = k
-		end
-		local s = status_of(t)
-		local was = state.seen[t.address]
-		local said = state.toasted[t.address]
-		-- A status other than the one last toasted may toast again later.
-		if said == s then
-			toasted[t.address] = said
-		end
-		if was == nil then
-			seen[t.address] = { status = s, since = nil }
-		elseif was.status ~= s then
-			seen[t.address] = { status = s, since = now }
-		else
-			seen[t.address] = was
+		local parent = t.parent
+		if parent and parent ~= t.address and by[parent] then
+			local children = kids[parent] or {}
+			table.insert(children, t.address)
+			kids[parent] = children
 		end
 	end
-	state.toasted = toasted
-	if not rebase then
-		for _, t in terms do
-			local s = status_of(t)
-			local was = state.seen[t.address]
-			if was == nil then
-				if s == "blocked" or s == "error" then
-					announce(state, t, nil, s)
-				end
-			elseif was.status ~= s then
-				announce(state, t, was.status, s)
-			end
-		end
-	end
-
-	local cursor = state.cursor
-	local gone = if cursor and not rebase and state.terms then state.by_addr[cursor] else nil
-	if gone and by[gone.address] then
-		gone = nil
-	end
-	local gone_live = if gone then (state.seen[gone.address] ~= nil and gone.state == "live") else false
-
-	state.seen = seen
-	state.baseline = true
-	state.terms = terms
-	state.by_addr = by
-	state.kids = kids
+	state.terms, state.by_addr, state.kids = terms, by, kids
 	state.hidden = hidden
-	state.machines = machines
-	state.remotes = remotes
-
 	local root = state.subtree
 	if root and not by[root] then
 		state.subtree = nil
 		set_notice(state, "Focus cleared: " .. root .. " left the list.", "muted")
 	end
-
 	local details: { [string]: Detail } = {}
-	for address, d in state.details do
-		if by[address] then
-			details[address] = d
-		end
+	for address, detail in state.details do
+		if by[address] then details[address] = detail end
 	end
 	state.details = details
-
 	local pending = state.pending_next
 	state.pending_next = nil
 	if pending == nil or not next_needs(state, pending) then rebuild(state) end
-	if gone then
-		probe_gone(state, gone, gone_live)
+end
+
+local function apply(state: State, terms: { Term }, machines: { Machine }, remotes: number, request_at: number)
+	local now = os.time()
+	local seen: { [string]: Seen } = {}
+	for _, t in terms do
+		local status = status_of(t)
+		local previous = state.seen[t.address]
+		seen[t.address] = if previous == nil then { status = status, since = nil }
+			elseif previous.status ~= status then { status = status, since = now }
+			else previous
 	end
+	local cursor = state.cursor
+	local old = if cursor then state.by_addr[cursor] else nil
+	state.seen, state.observed = seen, terms
+	state.machines, state.remotes = machines, remotes
+	local events = activity.observe(terms, state.run, request_at)
+	-- Details already cached by All can establish a run association without
+	-- introducing discovery requests or per-row detail polling.
+	for _, t in terms do
+		local detail = state.details[t.address]
+		local info = if detail then detail.info else nil
+		if info and info.run then activity.note_run(t.address, info.run) end
+	end
+	present(state)
+	if old and not state.by_addr[old.address] then
+		local finished: Term? = nil
+		for _, t in terms do
+			if t.address == old.address and t.state == "finished" then finished = t; break end
+		end
+		if finished then
+			local code = finished.exit_code
+			set_notice(state, label_of(old) .. " finished" .. (if code then " with exit " .. code else "")
+				.. ".  h shows finished terminals.", if code == nil or code == 0 then "success" else "error")
+		else
+			set_notice(state, label_of(old) .. " left the list.", "muted")
+		end
+	end
+	announce(events)
+	sync_activity()
 end
 
 local function ls_args(state: State): { string }
-	local args = { "ls", "--json" }
-	if state.finished then
-		table.insert(args, "--all")
-	end
+	local args = { "ls", "--json", "--all" }
 	if state.run then
 		table.insert(args, "--label")
 		table.insert(args, "run=" .. (state.run :: string))
@@ -947,13 +913,14 @@ local function refresh(state: State)
 	end
 	state.loading = true
 	local gen = state.gen
+	local request_at = tern.now()
 	local spawn_error = run_hc(ls_args(state), LS_TIMEOUT_MS, function(result)
 		if not alive(state) then
 			return
 		end
 		state.loading = false
 		if gen ~= state.gen then
-			-- h changed what to list while this ran.
+			-- The run scope changed while this request was in flight.
 			refresh(state)
 			return
 		end
@@ -963,13 +930,17 @@ local function refresh(state: State)
 			-- The same list as last time: nothing changed but the clock.
 			state.problem = nil
 			state.fetched = os.time()
+			-- Still advance request ordering and associate known run labels.
+			local observed: { Term } = state.observed or {}
+			announce(activity.observe(observed, state.run, request_at))
+			sync_activity()
 		else
-			local terms, hidden, machines, remotes = parse(result.stdout)
+			local terms, _hidden, machines, remotes = parse(result.stdout)
 			if terms then
 				state.last_stdout = result.stdout
 				state.problem = nil
 				state.fetched = os.time()
-				apply(state, terms, hidden, machines, remotes)
+				apply(state, terms, machines, remotes, request_at)
 			else
 				state.problem = {
 					kind = "failed",
@@ -983,13 +954,12 @@ local function refresh(state: State)
 		if state.cursor and not state.detail_timer then
 			fetch_detail(state, state.cursor :: string)
 		end
-		publish(state)
 		state.cx:render()
 	end)
 	if spawn_error then
 		state.loading = false
 		state.problem = { kind = "missing", text = "Tern could not start hc.", detail = spawn_error }
-		publish(state)
+		state.cx:render()
 	end
 end
 
@@ -1008,12 +978,12 @@ local function switch_scope(state: State, value: string)
 	state.pending_next = nil
 	state.requests = {}
 	state.terms = nil
+	state.observed = nil
 	state.by_addr, state.kids, state.rows = {}, {}, {}
 	state.cursor, state.subtree = nil, nil
 	state.index = 1
-	state.details, state.seen, state.toasted = {}, {}, {}
+	state.details, state.seen = {}, {}
 	state.logs, state.last_stdout, state.fetched, state.problem = nil, nil, nil, nil
-	state.baseline = false
 	if state.detail_timer then state.detail_timer:cancel(); state.detail_timer = nil end
 	local ok, saved = pcall(tern.kv.get, common.KV_PANE_SCOPES)
 	local entries: { any } = if ok and type(saved) == "table" then saved else {}
@@ -1025,7 +995,7 @@ local function switch_scope(state: State, value: string)
 	end
 	pcall(tern.kv.set, common.KV_PANE_SCOPES, next_entries)
 	set_notice(state, if run then "Run " .. run else "All terminals", "muted")
-	publish(state)
+	sync_activity()
 	refresh(state)
 end
 
@@ -1383,7 +1353,11 @@ local function head_view(state: State): Node
 	end
 	local controls: { Node } = {
 		button("Run…", "scope", { icon = "tag", keys = { "u" }, title = "Switch run scope" }),
-		toggle("Finished", "history", "finished", state.finished, "h", "Show finished terminals (hc ls --all)"),
+		ui.node("row", { key = "activity_control", gap = "xs", align = "center" }, {
+			toggle("Activity", "history", "activity", state.inbox, "v", "Observed activity inbox; opening does not mark read"),
+			ui.badge(tostring(state.unread), if state.unread > 0 then "accent" else "muted"),
+		}),
+		toggle("Finished", "history", "finished", state.finished, "h", "Show or hide finished terminal rows"),
 		toggle("Mute", "bell", "mute", state.muted, "m", "Mute status toasts"),
 		button("Refresh", "refresh", {
 			icon = "repeat",
@@ -1459,7 +1433,7 @@ local function stats_view(state: State, c: Counts): Node
 			label = "Finished",
 			value = tostring(finished),
 			sub = if state.finished then "listed · h hides" elseif finished > 0 then "hidden · h shows" else "none hidden",
-			title = "Finished terminals: hc ls hides them unless h asks for --all",
+			title = "Finished terminals in the full observation; h only controls row visibility",
 		},
 	}
 	local node = ui.stats(items)
@@ -1862,9 +1836,58 @@ local function logs_view(state: State, logs: Logs): Node
 	})
 end
 
+-- Metadata only: no terminal output, prompts, cwd or commands enter this view.
+-- The ledger caps the newest-first cache at 100 events; the list scrolls in
+-- the same remaining-height region as the terminal table.
+local function activity_view(state: State): Node
+	local scope = if state.run then "run " .. (state.run :: string) else "All terminals"
+	local children: { Node } = {
+		ui.node("row", { key = "toolbar", justify = "between", align = "center", gap = "sm", wrap = true }, {
+			ui.text({ ui.span("Activity", "strong"), ui.span(" · " .. scope .. " · " .. state.unread .. " unread", "muted") }),
+			ui.node("row", { key = "actions", gap = "sm", wrap = true }, {
+				button("Mark read", "activity_read", { variant = "quiet", disabled = state.unread == 0,
+					title = "Mark this scope's retained activity read in every console" }),
+				button("Clear", "activity_clear", { variant = "quiet", disabled = #state.activity == 0,
+					title = "Remove this scope's retained events from shared history; keep transition baselines" }),
+				button("Back", "activity_back", { variant = "quiet", keys = { "esc" } }),
+			}),
+		}),
+		ui.text(ui.span("Observed history, not a complete audit. Newest first; opening does not mark read.", "muted")),
+	}
+	if state.activity_problem then
+		table.insert(children, ui.text(ui.span(state.activity_problem :: string, "warning")))
+	end
+	local rows: { Node } = {}
+	for _, event in state.activity do
+		local status = event.status .. (if event.exit_code ~= nil then " · exit " .. event.exit_code else "")
+		local name = if event.name then event.name .. " (" .. event.address .. ")" else event.address
+		table.insert(rows, ui.node("col", { key = "event_" .. event.id, role = "herd.activity.event", gap = "xs" }, {
+			ui.node("row", { key = "meta", gap = "sm", align = "center", wrap = true }, {
+				ui.text(ui.span(os.date("%Y-%m-%d %H:%M:%S", event.at), "muted mono")),
+				ui.text(ui.span(status, WORDS[event.status] or "muted")),
+				ui.badge(if event.read then "read" else "unread", if event.read then "muted" else "accent"),
+			}),
+			ui.text(ui.span(name, if event.read then "muted" else "strong")),
+		}))
+	end
+	if #rows == 0 then
+		table.insert(children, ui.node("empty", { key = "empty", variant = "inline", frame = true,
+			icon = "history", title = if state.activity_problem then "Activity unavailable" else "No observed activity",
+			text = if state.activity_problem then "Refresh to retry reading history."
+				else "Transitions observed while a console polls will appear here. A run includes only known scope associations." }))
+	else
+		table.insert(children, ui.node("scroll", { key = "entries", grow = 1, basis = 0,
+			min = { h = "6lines" }, noun = "event" }, {
+			ui.node("col", { key = "events", gap = "md" }, rows),
+		}))
+	end
+	return ui.node("col", { key = "activity", role = "herd.activity", gap = "md", grow = 1,
+		basis = 0, min = { h = "12lines" } }, children)
+end
+
 local function problem_view(problem: Problem): Node
 	local help = if problem.kind == "missing"
-		then "The Herd block runs `hc ls --json` on the machine that runs your panes. Install herdr-core there "
+		then "The Herd block runs `hc ls --json --all` on the machine that runs your panes. Install herdr-core there "
 			.. "(`hc` in ~/.local/bin, /usr/local/bin or /usr/bin), then press **r**."
 		elseif string.find(problem.text, "server status", 1, true) then "Press **r** to try again."
 		else "`hc server status` says whether herdr-core is running. Press **r** to try again."
@@ -1924,7 +1947,7 @@ local function dock_view(state: State, compact: boolean): Node
 			spans = { ui.span(problem.text, "warning"), ui.span("  showing the last list", "muted") },
 		}))
 	end
-	table.insert(lines, legend(compact))
+	if not state.inbox then table.insert(lines, legend(compact)) end
 	return ui.col({ ui.lines(lines) })
 end
 
@@ -1966,13 +1989,10 @@ end
 
 local function toggle_finished(state: State)
 	state.finished = not state.finished
-	-- The next list differs by design: take it as a new baseline, so
-	-- terminals finished long ago don't toast as they appear.
-	state.baseline = false
-	state.last_stdout = nil
-	state.gen += 1
+	-- No request generation change, baseline reset or extra poll: h only
+	-- projects the last complete observation into visible terminal rows.
+	if state.observed then present(state) end
 	set_notice(state, if state.finished then "Showing finished terminals." else "Hiding finished terminals.", "muted")
-	refresh(state)
 end
 
 local function toggle_mute(state: State)
@@ -2035,6 +2055,7 @@ local function choose_scope(state: State)
 			set_notice(state, "Run discovery unavailable; choose a remembered label or type one.", "warning")
 		end
 		enqueue_window(state, "scope", state.run or "", "Run scope")
+		sync_activity()
 		state.cx:render()
 	end)
 	if spawn_error then
@@ -2102,6 +2123,18 @@ local function on_action(state: State, cx: BlockCx, act_name: string, value: str
 	end
 	if act_name == "retry" or act_name == "refresh" then
 		refresh(state)
+		sync_activity()
+	elseif act_name == "activity" then
+		state.inbox = not state.inbox
+		sync_activity()
+	elseif act_name == "activity_back" then
+		state.inbox = false
+	elseif act_name == "activity_read" then
+		activity.mark_read(state.run)
+		sync_activity()
+	elseif act_name == "activity_clear" then
+		activity.clear(state.run)
+		sync_activity()
 	elseif act_name == "scope" then
 		ask_window(state, cx, "scope")
 	elseif act_name == "herd_scope" and value then
@@ -2186,7 +2219,9 @@ tern.block.define("herd", {
 		local state: State = {
 			cx = cx,
 			run = run,
+			scopes = recent_scopes(),
 			terms = nil,
+			observed = nil,
 			by_addr = {},
 			kids = {},
 			rows = {},
@@ -2207,8 +2242,10 @@ tern.block.define("herd", {
 			finished = s.finished == true,
 			muted = s.muted == true,
 			seen = {},
-			baseline = false,
-			toasted = {},
+			inbox = false,
+			activity = activity.list(run),
+			unread = activity.unread(run),
+			activity_problem = activity.status(),
 			details = {},
 			detail_timer = nil,
 			detail_busy = false,
@@ -2242,6 +2279,7 @@ tern.block.define("herd", {
 		if needs > 0 then
 			table.insert(parts, needs .. " need you")
 		end
+		if state.unread > 0 then table.insert(parts, state.unread .. " unread") end
 		local title = if state.run then "Herd · " .. (state.run :: string) else "Herd · All terminals"
 		return if #parts > 0 then title .. " · " .. table.concat(parts, " · ") else title
 	end,
@@ -2251,7 +2289,9 @@ tern.block.define("herd", {
 		local wide = lay.beside
 		local compact = lay.narrow
 		local main: { Node } = { fixed(head_view(state)) }
-		if state.terms then
+		if state.inbox then
+			table.insert(main, activity_view(state))
+		elseif state.terms then
 			-- The scoped manifest sheet bounds the real page flex column
 			-- to this window's main region. Natural-height chrome and the
 			-- card keep their measured sizes; the list uses what remains.
@@ -2312,13 +2352,14 @@ tern.block.define("herd", {
 		local summary_counts = counts(state)
 		return {
 			main = ui.node("col", { role = "herd.console", herd_requests = state.requests,
-				herd_scope = state.run or "", herd_scopes = recent_scopes(), herd_generation = state.scope_epoch,
-				herd_cursor = state.cursor or "",
+				herd_scope = state.run or "", herd_scopes = state.scopes, herd_generation = state.scope_epoch,
+				herd_cursor = state.cursor or "", herd_inbox = state.inbox,
+				herd_activity = state.activity, herd_unread = state.unread,
 				herd_summary = { working = summary_counts.working or 0, blocked = summary_counts.blocked or 0,
-					errors = summary_counts.error or 0, run = state.run or "" } }, {
+					errors = summary_counts.error or 0, unread = state.unread, run = state.run or "" } }, {
 				ui.node("col", { key = "page", role = "herd.page", gap = "lg" }, main),
 			}),
-			dock = if state.terms or state.notice then dock_view(state, compact) else nil,
+			dock = if state.terms or state.notice or state.inbox then dock_view(state, compact) else nil,
 		}
 	end,
 
@@ -2327,8 +2368,14 @@ tern.block.define("herd", {
 			return false
 		end
 		local k = key.text or key.name
+		if state.inbox and not (INBOX_KEYS[k] or INBOX_KEYS[key.name]) then
+			-- Do not steer an invisible selected terminal from the inbox.
+			return false
+		end
 		local i = state.index
-		if key.name == "tab" then
+		if k == "v" then
+			on_action(state, cx, "activity")
+		elseif key.name == "tab" then
 			cycle_filter(state, if key.shift then -1 else 1)
 		elseif k == "1" or k == "2" or k == "3" or k == "4" then
 			set_filter(state, FILTERS[tonumber(k) :: number])
@@ -2368,10 +2415,12 @@ tern.block.define("herd", {
 			ask_window(state, cx, "scope")
 		elseif k == "r" then
 			refresh(state)
+			sync_activity()
 		elseif key.name == "escape" then
-			-- Back out one layer: the logs, then the focus. The selection
-			-- is not a layer.
-			if state.logs then
+			-- Back out one layer: inbox, logs, then focus.
+			if state.inbox then
+				state.inbox = false
+			elseif state.logs then
 				state.logs = nil
 			elseif state.subtree then
 				state.subtree = nil

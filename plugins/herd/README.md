@@ -1,6 +1,6 @@
 # Herd — hc terminals and agents in a Tern block
 
-A Tern plugin that shows herdr-core's terminals (`hc ls --json`) in a block, so
+A Tern plugin that shows herdr-core's terminals (`hc ls --json --all`) in a block, so
 a herd run (a lead agent and its builders in git worktrees) can be watched and
 steered from Tern without typing `hc` commands.
 
@@ -30,9 +30,10 @@ The block opens in Tern's sans face and follows Tern's page layout (Designing
 Views):
 
 - **Head row**: the title, `herdr-core · updated HH:MM:SS` and the current
-  run label, with **Run…** (`u`), **Finished** (`h`), **Mute** (`m`) and
-  **Refresh** (`r`) controls. Run scopes switch in place; All terminals is
-  the unfiltered scope. Finished shows finished rows; Mute turns toasts off.
+  run label, with **Run…** (`u`), **Activity** (`v`, with an unread badge),
+  **Finished** (`h`), **Mute** (`m`) and **Refresh** (`r`) controls. Run scopes
+  switch in place; All terminals is the unfiltered scope. Finished only
+  controls row visibility; Mute turns toasts off, not history recording.
   Subtree focus appears in the head metadata as `focus <terminal>`. When `hc ls` fails after a list
   has loaded, the meta says `stale, 40s old` in the warning tone and the last
   list stays on screen.
@@ -41,8 +42,8 @@ Views):
   tone and "N unreachable" when hc can't reach some). **Worktrees**: distinct
   working directories of the listed terminals ("N shared" when terminals
   share one). **Turns**: hc's turn counters summed, with the busiest
-  terminal. **Finished**: how many finished terminals `hc ls` hides (or, with
-  `h` on, lists). The status counts live in the filter tabs instead: Tern's
+  terminal. **Finished**: how many finished terminals are hidden (or, with
+  `h` on, listed). The status counts live in the filter tabs instead: Tern's
   `StatItem` is only `label`, `value`, `sub`, `tone` and `title`, and a
   stats strip's actions fire for the whole strip, so a tile can't be a
   clickable filter with a selected state; tabs can.
@@ -101,6 +102,11 @@ Views):
 - **Logs card**: `l` reads the last 40 lines once (`hc read <t> --lines 40`)
   into a card under the view, in a box half the pane tall that opens at the
   newest line and scrolls up. `l` again reads again; nothing polls it.
+- **Activity inbox**: `v` replaces the terminal view with the newest observed
+  transitions for the current run scope. Its rows contain timestamps,
+  terminal names/addresses, statuses and exit codes, never terminal output.
+  Opening does not mark read; **Mark read**, **Clear** and **Back** are explicit
+  controls. The bounded list scrolls and the head stays available.
 - **Dock**: a one-line notice (sent, interrupted, refused, left the list),
   the refresh problem while a stale list shows, and a legend of only the keys
   that have no button on screen: ↑↓ select, Home/End jump, Enter watch,
@@ -176,9 +182,10 @@ The focused console wins; otherwise it reuses the most recently focused/used,
 then the lowest pane id. The reused console keeps its saved run scope.
 
 While a Herd block is open, the status line shows `herd N working`
-(`· M blocked`, `· K error`): error tone with errors, else warning with
-blocked terminals, else info while something works; clicking it focuses the
-block.
+(`· M blocked`, `· K error`, `· U unread`): error tone with errors, else
+warning with blocked terminals, else info while something works. Unread
+activity keeps it visible even when no terminal is active; clicking it
+focuses the block.
 
 ## Keys
 
@@ -195,12 +202,13 @@ block.
 | x | interrupt: asks to confirm, then runs `hc interrupt <t>`. Refused for done, idle and finished terminals, and checked again after you confirm |
 | w | worktree: opens a git block on the terminal's working directory (`cx.git:open`, beside). Local terminals only |
 | f | focus: show only the selected terminal and its descendants; `f` again clears it |
-| h | show or hide finished terminals (`hc ls --all`) |
+| h | show or hide finished terminal rows; observation always includes them |
+| v | toggle Activity; opening it does not mark read |
 | m | mute or unmute toasts |
 | r | refresh now |
-| Esc | close the logs card, then clear the focus |
+| Esc | close Activity, then the logs card, then clear the focus |
 
-Only `s` and `x` change anything, and both ask first. `ctrl+\` detaches from an
+Only `s` and `x` change terminals, and both ask first. `ctrl+\` detaches from an
 attach split (hc's key); closing the split also only detaches, the terminal
 keeps running.
 
@@ -221,6 +229,7 @@ It walks blocked/error rows in the full scoped parent–child tree order,
 relative to the selected address, wrapping in either direction. A sole target
 can select itself. Once a target is found it clears subtree focus and switches
 to **Needs you**, so the target cannot remain hidden by the previous view.
+A successful navigation also closes Activity so the selected target is visible.
 No eligible target leaves the view unchanged and displays a notice.
 
 Only the console's existing list is used: no discovery request or extra `hc ls`
@@ -261,40 +270,83 @@ requests. A confirmation already open keeps its original address and scope
 generation; confirming after a switch is refused rather than retargeted.
 Recent labels are capped at 12 and saved pane scopes at 32. Scope summary
 metadata belongs to its pane, so another console cannot overwrite its counts.
+An open Activity inbox stays open when the scope changes, immediately switching
+to that scope's cached history and unread count; its previous scope's events do
+not leak into the new view.
 
+
+## Activity inbox
+
+Press **v** or click **Activity** in the head. This is **observed history, not a
+complete audit**: it covers successful snapshots returned while at least one
+console is open and polling, not every change between polls or during closed,
+unreachable or unobserved periods. The first snapshot is a baseline, not a burst
+of news; old finished terminals seen for the first time never become new events.
+Existing baselines survive reloads, so a later snapshot can reveal a changed
+state, but cannot reconstruct intervening transitions or their actual times.
+Timestamps are when the console observed the change, in local time.
+
+The newest 100 events are shared by all consoles on this Tern host. The head
+badge, tab title and status segment show the current scope's unread count.
+Rows show only timestamp, name/address, status, optional exit code and read
+state. Opening or closing the inbox does not mark anything read. **Mark read**
+marks the retained events in this scope; **Clear** removes them but keeps
+transition baselines, so the next identical poll does not recreate them.
+Both changes propagate to every live console. An event's read/removal state is
+shared across All terminals and any run scopes that include it.
+**Back**, **v** or **Esc** returns to the terminal view without discarding its
+filter, selection or logs. Terminal-steering keys do not act on an invisible
+selection while Activity is open.
+
+Run membership is learned only from scoped observations and run labels already
+available in cached selected-terminal details. All terminals includes every
+retained event; a run includes only events associated with that known label.
+An All observation can therefore appear before its run membership is known.
+This is not a complete run audit, and changing labels does not reconstruct
+past membership.
+
+Storage contains only bounded event metadata, read state and transition
+baselines: no cwd, prompts, output, command arguments or logs. Retention is
+capped at 100 events, 512 terminal baselines and 12 run associations per
+terminal/event. Once baseline retention fills, unknown addresses are
+conservatively baselined instead of treating possibly evicted old rows as
+fresh unread activity; existing retained addresses still record transitions.
+Unread events can age out with retention. History read/save failures are shown;
+an unreadable store is not overwritten with an empty one. Muting toasts does
+not mute history or unread badges.
 
 ## Toasts
 
-After the first list (never on it), the block toasts status changes it sees
-between two polls:
+The shared activity ledger records these observed transitions, and toasts each
+new event once across all consoles:
 
 - a terminal turns **blocked** (info toast) or **error** (error toast), or
   first appears in one of them;
 - **working → done** (success) and **working → idle** (info);
 - **finished** (success for exit 0, else error).
 
-Each change toasts once per status (the same snapshot twice, or the same
-status from two sources, doesn't repeat it). `m` mutes them. Turning `h` on or
-off takes the next list as a new baseline, so old finished terminals don't
-toast as they appear.
+Repeated snapshots, overlapping run scopes and multiple consoles do not repeat
+the same event/toast. An alive, relevant, unmuted console delivers it; a muted
+first observer does not swallow another console's notification. `m` mutes only
+that console's toasts. Turning `h` on or off does not rebaseline observations
+or make an extra list request.
 
 Tern's toast levels are `success`, `info` and `error` only (`ToastLevel` in
 `tern.d.luau`); there is no warning toast, so blocked is an info toast while
 the table and status segment show it in the warning tone.
 
-**Finishing is only partly visible.** Plain `hc ls` leaves finished terminals
-out, so a terminal that disappears from the list can't be assumed to have
-finished. The block does not guess: with `h` on, finished terminals stay in
-the list and their finish toasts like any change; with `h` off, only the
-*selected* terminal is checked when it disappears (one `hc get`), which
-toasts and notes "finished with exit N" or says it left the list. Other
-terminals that finish while `h` is off just leave the table.
+The host always asks for `--all`, so a live → finished transition is recorded
+and can toast even when `h` is off and the terminal was not selected. A row
+that is simply absent is not assumed finished: removal, remote failures or
+changes between polls may be invisible. No selected-disappearance `hc get`
+probe is needed. See [Activity inbox](#activity-inbox) for retention and
+observation limits.
 
 ## How it works
 
 - `host.luau` (runs in the Tern daemon) defines the block `herd.herd`, polls
-  `hc ls --json` (`--all` with `h`, `--label run=<id>` with a `run=<id>`
-  block argument) every 2 s with one `tern.timer` per live block and
+  `hc ls --json --all` (`--label run=<id>` for a run scope) every 2 s with
+  one `tern.timer` per live block and
   `tern.process.run` (10 s timeout), and runs `hc get`, `hc read`, `hc send`
   and `hc interrupt`. It finds `hc` by name, then at `$HOME/.local/bin/hc`,
   `/usr/local/bin/hc` and `/usr/bin/hc` (a daemon started by a launcher may
@@ -304,6 +356,12 @@ terminals that finish while `h` is off just leave the table.
 - Status ages: the host keeps, per address, the last status and when it
   changed (`since`); a new address has no `since`. This lives only in the
   block, so a reload starts again without times.
+- `activity.luau` is a host-only singleton shared by all consoles. Full
+  observations reach it before finished-row presentation filtering. Request
+  start times discard older overlapping observations; only newly added events
+  drive toasts. Read/clear/observation changes resync every alive console's
+  scoped history and unread cache, then render its root metadata. Rendering does not
+  access the history store or execute commands.
 - The card's `hc get <address> --json` runs only for the selected terminal:
   200 ms after the selection stops moving, and then at most once every 10 s
   while it stays selected (each poll asks; a cached answer younger than 10 s
@@ -339,8 +397,8 @@ terminals that finish while `h` is off just leave the table.
   confirmed send or interrupt still returns through `cx.session:event`,
   and the host rechecks it against the latest list before running `hc`.
 - The status segment reads the chosen Herd pane's scope-specific root summary
-  on a 3-second timer. The host also publishes per-live-pane counts to kv,
-  removing them when the pane retires; another scope never supplies its counts.
+  on a 3-second timer. Counts are ephemeral root metadata, not persisted
+  per-pane keys; another scope never supplies the chosen console's counts.
 - A pane id survives a block restart or plugin reload: the host keeps one
   state object per pane, retires the old one in `init` (cancelling its poll
   and debounce timers), and every timer or process callback checks it is still
@@ -359,7 +417,8 @@ terminals that finish while `h` is off just leave the table.
   launching a browser. With multiple capable replicas, one executes each
   action; a crash between acknowledgement and execution can lose that action,
   but it is never replayed automatically. Try it again explicitly.
-- Finished terminals: see the caveat under Toasts.
+- Activity/finished history is bounded and only includes observed snapshots;
+  see [Activity inbox](#activity-inbox), not a claim of complete terminal audit.
 - `tern plugin list` reports the host half only: a syntax error in
   `window.luau` shows up as a log warning (`plugin window entry failed to
   load`) and a missing palette command.

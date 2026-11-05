@@ -4,10 +4,12 @@
 #   test/typecheck.sh [--defs PATH]
 #
 # Downloads luau-lsp and Tern's pinned tern.d.luau into a cache, verifies both
-# SHA-256 digests and runs `luau-lsp analyze` over the plugin's three Luau
-# files from the repository root. Exit 0 means no type errors; lint warnings
-# alone do not fail the run. `--defs PATH` checks against a local copy, e.g.
-# one made by `tern plugin types DIR`, instead of the pinned download.
+# SHA-256 digests and runs `luau-lsp analyze` over every plugins/herd/*.luau
+# module from the repository root, including helpers nothing requires yet;
+# host.luau, window.luau and common.luau must exist. Exit 0 means no type
+# errors; lint warnings alone do not fail the run. `--defs PATH` checks
+# against a local copy, e.g. one made by `tern plugin types DIR`, instead of
+# the pinned download.
 #
 # The cache is ${TYPECHECK_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/tern-herd-typecheck}
 # (CI sets it to $RUNNER_TEMP). A cached file is reused only while its digest
@@ -21,8 +23,7 @@
 #
 # The analyze gate uses the default formatter on purpose: `--formatter=plain`
 # prints the same errors but still exits 0, so it cannot be the gate. Relative
-# `require("./common")` needs no .luaurc or source map — luau-lsp resolves it
-# from the script's directory, which the last check below re-confirms.
+# requires need no .luaurc or source map; luau-lsp resolves them per script.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -36,8 +37,6 @@ TERN_DEFS_COMMIT=0479f7048274aedc9f3496ca60675b754953e5a4
 TERN_DEFS_URL=https://raw.githubusercontent.com/stencil-hq/tern-sdk/$TERN_DEFS_COMMIT/plugins/tern.d.luau
 TERN_DEFS_SHA256=50ac8b5dcc41f6e853730d05db5525566992d765e5d3a249ce5e0a5ec4f7749e
 
-FILES=(plugins/herd/host.luau plugins/herd/window.luau plugins/herd/common.luau)
-
 DEFS=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,7 +47,7 @@ while [ $# -gt 0 ]; do
       ;;
     --defs=*) DEFS=${1#--defs=}; shift ;;
     -h | --help)
-      sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "typecheck: unknown option $1" >&2; exit 2 ;;
@@ -117,15 +116,12 @@ else
 fi
 
 cd "$REPO"
-for f in "${FILES[@]}"; do
+for f in plugins/herd/host.luau plugins/herd/window.luau plugins/herd/common.luau; do
   [ -f "$f" ] || { echo "typecheck: missing $f" >&2; exit 1; }
 done
-# A half that stopped requiring ./common would hide drift in the shared module.
-for f in "${FILES[@]}"; do
-  if [ "$f" != plugins/herd/common.luau ] && ! grep -q 'require("\./common")' "$f"; then
-    echo "typecheck: warning: $f no longer requires ./common" >&2
-  fi
-done
+# Every module in the plugin directory, referenced or not: a new half or helper
+# joins the gate without editing this script.
+mapfile -t FILES < <(printf '%s\n' plugins/herd/*.luau | LC_ALL=C sort)
 
 echo "typecheck: $("$LSP/luau-lsp" --version) analyze --platform=standard --definitions=@tern=$DEFS ${FILES[*]}"
 status=0

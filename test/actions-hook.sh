@@ -6,6 +6,12 @@ ctl() { "$TERNFD" ctl --control "$SOCK" "$@"; }
 pump() { ctl wait 100 >/dev/null; sleep 0.025; }
 wait_text() {
   for _ in {1..30}; do
+    # This adapter exists only in scope-open's private window copy, and this
+    # hook runs only after shoot.sh validates its pinned fake hc. It invokes
+    # the real production consumer, not synthetic claims or picker results.
+    if [ "$ACTION_CASE" = scope-open ] && [ "${SHOOT_SCOPE_OPEN_DRAIN:-0}" = 1 ]; then
+      ctl plugins run plugin.herd.harness_drain >/dev/null
+    fi
     pump
     if ctl tree | grep -F "$1" >/dev/null; then return 0; fi
   done
@@ -107,6 +113,81 @@ hold_private_lists() {
   } >"$T/bin/hc"
 }
 
+# Activity cases never let the fake's automatic seq counter drive the test.
+# shoot.sh parks snapshots under this run's fixture/phases before Tern starts.
+wait_lua() {
+  for _ in {1..60}; do
+    pump
+    if check_lua "$1" >/dev/null 2>&1; then return 0; fi
+  done
+  echo "surface assertion did not settle: $1" >&2
+  ctl tree >&2
+  return 1
+}
+activity_root='local root = cx.session:surface(activity_primary,{root="main",depth=0,nodes=1}).main; '
+activity_event() {
+  local act_json
+  act_json=$(jq -Rn --arg act "$1" '$act')
+  check_lua "cx.session:event(${2:-activity_primary},{ev='action',id='main',act=$act_json})"
+}
+wait_activity() {
+  local pane=${3:-activity_primary}
+  wait_lua "local root = cx.session:surface($pane,{root='main',depth=0,nodes=1}).main; assert(#root.p.herd_activity == $1 and root.p.herd_unread == $2); assert(root.p.herd_summary.unread == $2)"
+}
+activity_phase() {
+  local phase=$1
+  [ -f "$T/fixture/phases/$phase.json" ]
+  # Atomic replacement: a background poll can only read a complete snapshot.
+  cp "$T/fixture/phases/$phase.json" "$T/fixture/ls-all.next"
+  mv "$T/fixture/ls-all.next" "$T/fixture/ls-all.json"
+  jq '.terminals |= map(select(.state != "finished"))' \
+    "$T/fixture/ls-all.json" >"$T/fixture/ls.next"
+  mv "$T/fixture/ls.next" "$T/fixture/ls.json"
+  for scope in cart checkout; do
+    if [ "$scope" = cart ]; then
+      jq '.terminals |= map(select(.address == "t71" or .address == "t72"))' \
+        "$T/fixture/ls-all.json" >"$T/fixture/scopes/$scope/ls-all.next"
+    else
+      jq '.terminals |= map(select(.address == "t73"))' \
+        "$T/fixture/ls-all.json" >"$T/fixture/scopes/$scope/ls-all.next"
+    fi
+    mv "$T/fixture/scopes/$scope/ls-all.next" "$T/fixture/scopes/$scope/ls-all.json"
+    jq '.terminals |= map(select(.state != "finished"))' \
+      "$T/fixture/scopes/$scope/ls-all.json" >"$T/fixture/scopes/$scope/ls.next"
+    mv "$T/fixture/scopes/$scope/ls.next" "$T/fixture/scopes/$scope/ls.json"
+  done
+  activity_event refresh
+}
+activity_baseline() {
+  [ -f "$T/fixture/phases/01.json" ] && [ ! -d "$T/fixture/seq" ]
+  check_lua "${probe}activity_primary = p"
+  wait_activity 0 0
+  wait_cursor t71 activity_primary
+  wait_lua "${activity_root}assert(root.p.herd_summary.working == 4)"
+  wait_lua "${activity_root}assert(table.find(root.p.herd_scopes,'activity'))"
+  # The old finished terminal is really in the all-list response, not omitted
+  # to make a false initial-unread assertion pass.
+  jq -e 'any(.terminals[]; .address == "t70" and .state == "finished")' \
+    "$T/fixture/ls-all.json" >/dev/null
+}
+activity_no_sweep() {
+  local selected_pattern=${1:-'^get t71 --json$'}
+  # Selected-card t71 is permitted; no activity observer may fetch another
+  # terminal, including a disappeared row, just to infer a finish.
+  if grep '^get ' "$T/state/invocations.log" | grep -vE "$selected_pattern"; then
+    echo 'activity fetched unselected terminal details' >&2
+    return 1
+  fi
+  if grep '^ls ' "$T/state/invocations.log" | grep -vE '^ls --json --all( --label run=.+)?$'; then
+    echo 'activity observation omitted --all' >&2
+    return 1
+  fi
+  no_terminal_actions
+}
+activity_metadata() {
+  check_lua "${activity_root}local ids = {}; local last = math.huge; for _, e in root.p.herd_activity do assert(type(e.id) == 'number' and not ids[e.id]); ids[e.id] = true; assert(type(e.at) == 'number' and e.at > 1000000000 and e.at <= last); last = e.at; assert(type(e.address) == 'string' and type(e.status) == 'string' and type(e.read) == 'boolean' and type(e.runs) == 'table'); for key in e do assert(table.find({'id','at','address','name','from','status','exit_code','runs','read'},key), 'non-metadata activity field: ' .. key) end end"
+}
+
 case "$ACTION_CASE" in
   watch|doubleclick|attach|watch-unfocused|doubleclick-unfocused)
     before=$(ctl state | jq '[.tabs[].panes] | add')
@@ -199,6 +280,233 @@ case "$ACTION_CASE" in
       echo 'abandoned window: grant expires with a dock notice, no replay'
     fi
     [ ! -s "$T/state/actions.log" ]
+    ;;
+  activity-events)
+    activity_baseline
+    activity_phase 02
+    wait_activity 3 3
+    check_lua "${activity_root}local found = {}; for _, e in root.p.herd_activity do found[e.address] = e; assert(e.address ~= 't70' and e.address ~= 't74') end; assert(found.t71.status == 'blocked' and found.t73.status == 'done'); assert(found.t72.status == 'finished' and found.t72.exit_code == 7); assert(root.p.herd_cursor == 't71' and not root.p.herd_inbox)"
+    rows=$(ctl tree | jq -r '.. | objects | select((.class? // "" | split(" ")) | index("sf-tbl-row")) | .. | objects | .text? // empty')
+    [[ "$rows" = *b1-cart* && "$rows" != *b2-checkout* && "$rows" != *b0-summary* && "$rows" != *b4-images* ]]
+    # h changes presentation, not observation arguments or ledger contents.
+    ctl key h >/dev/null
+    wait_text b2-checkout
+    ctl key h >/dev/null
+    wait_activity 3 3
+    rows=$(ctl tree | jq -r '.. | objects | select((.class? // "" | split(" ")) | index("sf-tbl-row")) | .. | objects | .text? // empty')
+    [[ "$rows" != *b2-checkout* ]]
+    ctl key v >/dev/null
+    wait_lua "${activity_root}assert(root.p.herd_inbox)"
+    wait_activity 3 3
+    wait_text 'Mark read'
+    wait_text 'Clear'
+    # Opening and closing the inbox do not acknowledge events.
+    ctl key Escape >/dev/null
+    wait_lua "${activity_root}assert(not root.p.herd_inbox)"
+    activity_event activity
+    wait_lua "${activity_root}assert(root.p.herd_inbox)"
+    activity_event activity_back
+    wait_lua "${activity_root}assert(not root.p.herd_inbox)"
+    activity_phase 03
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1 and root.p.herd_summary.blocked == 0)"
+    wait_activity 3 3
+    activity_phase 04
+    wait_activity 4 4
+    # Add idle and error transitions through real list snapshots as well.
+    jq '(.terminals[] | select(.address == "t71") | .status) = "working"' \
+      "$T/fixture/phases/04.json" >"$T/fixture/phases/05.json"
+    jq '(.terminals[] | select(.address == "t71") | .status) = "idle"' \
+      "$T/fixture/phases/05.json" >"$T/fixture/phases/06.json"
+    jq '(.terminals[] | select(.address == "t71") | .status) = "error"' \
+      "$T/fixture/phases/06.json" >"$T/fixture/phases/07.json"
+    activity_phase 05
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1)"
+    wait_activity 4 4
+    activity_phase 06
+    wait_activity 5 5
+    check_lua "${activity_root}assert(root.p.herd_activity[1].status == 'idle')"
+    activity_phase 07
+    wait_activity 6 6
+    check_lua "${activity_root}assert(root.p.herd_activity[1].status == 'error')"
+    # Unread keeps the native status segment present even with no work left.
+    jq '.terminals = []' "$T/fixture/phases/07.json" >"$T/fixture/phases/08.json"
+    activity_phase 08
+    wait_lua "${activity_root}local s = root.p.herd_summary; assert(s.working == 0 and s.blocked == 0 and s.errors == 0 and s.unread == 6)"
+    wait_activity 6 6
+    wait_text '6 unread'
+    wait_lua "local tree = cx.session:surface(activity_primary,{root='main',depth=6,nodes=500}).main; local found = false; local function visit(n) if string.sub(n.id,-16) == 'activity_control' then local encoded = tern.json.encode(n); assert(string.find(encoded,'Activity',1,true) and string.find(encoded,'\"6\"',1,true)); found = true end; for _, child in n.c or {} do visit(child) end end; visit(tree); assert(found, 'Activity head badge absent')"
+    activity_event activity
+    wait_lua "${activity_root}assert(root.p.herd_inbox)"
+    activity_metadata
+    activity_no_sweep
+    echo 'activity events: baseline 0, blocked/hidden finish/done 3, repeat 3, done 4, idle 5, error 6; disappearance never guessed'
+    ;;
+  activity-persistence)
+    activity_baseline
+    activity_phase 02
+    wait_activity 3 3
+    activity_event activity
+    wait_lua "${activity_root}assert(root.p.herd_inbox)"
+    activity_event activity_read
+    wait_activity 3 0
+    check_lua "${activity_root}for _, e in root.p.herd_activity do assert(e.read) end; activity_old_ids = {}; for _, e in root.p.herd_activity do activity_old_ids[e.id] = true end"
+    activity_phase 03
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1)"
+    activity_phase 04
+    wait_activity 4 1
+    check_lua "${activity_root}activity_saved_ids = {}; for _, e in root.p.herd_activity do activity_saved_ids[e.id] = true; assert(e.read == (activity_old_ids[e.id] == true)) end"
+    ctl plugins fixtures >/dev/null
+    wait_activity 4 1
+    check_lua "${activity_root}for _, e in root.p.herd_activity do assert(activity_saved_ids[e.id]); assert(e.read == (activity_old_ids[e.id] == true)) end"
+    activity_metadata
+    # Inspect only the ledger subtree: other plugin keys legitimately retain
+    # scope state, and selected-terminal detail caches are not history.
+    kv=${KVFILE:?shoot.sh must provide its validated private kv path}
+    case "$kv" in "$T"/*) ;; *) echo 'validated kv path escaped the private run' >&2; exit 1 ;; esac
+    [ -f "$kv" ]
+    jq -e '.activity.events | length == 4' "$kv" >/dev/null
+    jq -e '[.activity | .. | objects | keys[] | select(. == "cwd" or . == "argv" or . == "output" or . == "prompt" or . == "first_message")] | length == 0' "$kv" >/dev/null
+    seen_before=$(jq -c '.activity.seen | map({address,state,status,runs}) | sort_by(.address)' "$kv")
+    activity_event activity_clear
+    wait_activity 0 0
+    jq -e --argjson before "$seen_before" \
+      '(.activity.seen | map({address,state,status,runs}) | sort_by(.address)) == $before' "$kv" >/dev/null
+    # A nonzero working count is a list-completion barrier after reload,
+    # unlike the initial/default zero count. Resuming adds no event.
+    activity_phase 03
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1)"
+    wait_activity 0 0
+    ctl plugins fixtures >/dev/null
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1)"
+    wait_activity 0 0
+    activity_event refresh
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1)"
+    wait_activity 0 0
+    # Repeating a blocked/error snapshot after Clear must not reinterpret it
+    # as a newly discovered attention transition. Reload makes nonzero
+    # summary counts a completed-list barrier, not a stale prior render.
+    activity_phase 02
+    wait_activity 1 1
+    wait_lua "${activity_root}assert(root.p.herd_summary.blocked == 1)"
+    seen_before=$(jq -c '.activity.seen | map({address,state,status,runs}) | sort_by(.address)' "$kv")
+    activity_event activity_clear
+    wait_activity 0 0
+    jq -e --argjson before "$seen_before" \
+      '(.activity.seen | map({address,state,status,runs}) | sort_by(.address)) == $before' "$kv" >/dev/null
+    ctl plugins fixtures >/dev/null
+    wait_lua "${activity_root}assert(root.p.herd_summary.blocked == 1)"
+    wait_activity 0 0
+    jq '(.terminals[] | select(.address == "t71") | .status) = "error"' \
+      "$T/fixture/phases/02.json" >"$T/fixture/phases/09.json"
+    activity_phase 09
+    wait_activity 1 1
+    wait_lua "${activity_root}assert(root.p.herd_summary.errors == 1)"
+    seen_before=$(jq -c '.activity.seen | map({address,state,status,runs}) | sort_by(.address)' "$kv")
+    activity_event activity_clear
+    wait_activity 0 0
+    jq -e --argjson before "$seen_before" \
+      '(.activity.seen | map({address,state,status,runs}) | sort_by(.address)) == $before' "$kv" >/dev/null
+    ctl plugins fixtures >/dev/null
+    wait_lua "${activity_root}assert(root.p.herd_summary.errors == 1)"
+    wait_activity 0 0
+    activity_no_sweep
+    echo 'activity persistence: explicit read, new unread, IDs/read markers restored; clear survives reload and repeated observation'
+    ;;
+  activity-shared-scopes)
+    activity_baseline
+    # The first observer is muted, but both consoles share one real ledger.
+    activity_event mute
+    check_lua "activity_second = cx:new_block('herd.herd',nil,'beside'); assert(activity_second)"
+    wait_activity 0 0 activity_second
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_summary.working == 4)"
+    activity_phase 02
+    wait_activity 3 3
+    wait_activity 3 3 activity_second
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 0 and root.p.herd_summary.blocked == 1)"
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_summary.working == 0 and r.herd_summary.blocked == 1)"
+    check_lua "${activity_root}local other = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; for i, e in root.p.herd_activity do assert(other.herd_activity[i].id == e.id) end"
+    # Every observer processes the same snapshot without adding duplicates.
+    activity_event refresh activity_second
+    wait_activity 3 3 activity_second
+    # t71's cached get knows run=activity, even though that scope has no list
+    # dataset. This tests association, not invented complete run history.
+    activity_event 'herd_scope="activity"' activity_second
+    wait_activity 1 1 activity_second
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_scope == 'activity' and r.herd_activity[1].address == 't71')"
+    # Scoped list observations add t72 membership without a per-row get.
+    activity_event 'herd_scope="cart"' activity_second
+    wait_activity 2 2 activity_second
+    activity_event activity_read activity_second
+    wait_activity 2 0 activity_second
+    wait_activity 3 1
+    activity_event 'herd_scope="checkout"' activity_second
+    wait_activity 1 1 activity_second
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_scope == 'checkout' and r.herd_activity[1].address == 't73')"
+    activity_event activity_clear activity_second
+    wait_activity 0 0 activity_second
+    wait_activity 2 0
+    activity_event 'herd_scope="missing"' activity_second
+    wait_activity 0 0 activity_second
+    activity_event 'herd_scope=""' activity_second
+    wait_activity 2 0 activity_second
+    activity_no_sweep '^get (t71|t73) --json$'
+    echo 'activity shared scopes: muted observation persists; two consoles dedupe/sync; cached get and scoped membership; scoped read/clear do not affect other events'
+    ;;
+  activity-scope-order)
+    activity_baseline
+    check_lua "activity_second = cx:new_block('herd.herd',nil,'beside'); assert(activity_second)"
+    wait_activity 0 0 activity_second
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_summary.working == 4)"
+    # Capture one genuine fake-hc scoped reply before any All response can
+    # observe the finish. Keep All on phase 01 until the capture marker exists.
+    cp "$T/bin/hc" "$T/bin/hc-ready"
+    {
+      printf '#!/bin/sh\n'
+      printf 'case "$*" in\n'
+      printf '  "ls --json --all --label run=cart")\n'
+      printf '    "%s" "$@" >"%s" || exit "$?"\n' "$T/bin/hc-ready" "$T/state/scoped.reply"
+      printf '    : >"%s"\n' "$T/state/scoped.captured"
+      printf '    n=0\n'
+      printf '    while [ ! -e "%s" ]; do\n' "$T/state/scoped.release"
+      printf '      if [ "$n" -ge 160 ]; then echo "scoped reply barrier exceeded 8 seconds" >&2; exit 124; fi\n'
+      printf '      n=$((n + 1)); sleep 0.05\n'
+      printf '    done\n'
+      printf '    cat "%s"; exit 0 ;;\n' "$T/state/scoped.reply"
+      printf 'esac\n'
+      printf 'exec "%s" "$@"\n' "$T/bin/hc-ready"
+    } >"$T/bin/hc-next"
+    chmod +x "$T/bin/hc-next"
+    mv "$T/bin/hc-next" "$T/bin/hc"
+    jq '.terminals |= map(select(.address == "t71" or .address == "t72"))' \
+      "$T/fixture/phases/02.json" >"$T/fixture/scopes/cart/ls-all.next"
+    mv "$T/fixture/scopes/cart/ls-all.next" "$T/fixture/scopes/cart/ls-all.json"
+    activity_event 'herd_scope="cart"' activity_second
+    captured=""
+    for _ in {1..60}; do
+      pump
+      if [ -f "$T/state/scoped.captured" ]; then captured=1; break; fi
+    done
+    [ -n "$captured" ] || { echo 'older scoped list did not reach its private reply barrier' >&2; exit 1; }
+    grep -q '^ls --json --all --label run=cart$' "$T/state/invocations.log"
+    jq -e 'any(.terminals[]; .address == "t72" and .state == "finished" and .exit_code == 7)' \
+      "$T/state/scoped.reply" >/dev/null
+    activity_phase 02
+    wait_activity 3 3
+    # An All-only working terminal proves a later-started All response was
+    # applied before the older scoped response is released. First seeing a
+    # working terminal establishes a baseline; it cannot add an event.
+    jq '.terminals += [{address:"t75",name:"b5-catalog",state:"live",status:"working",turn:1,agent:"codex",cwd:"/home/alex/code/shop/.worktrees/catalog",where:"shop / 1"}]' \
+      "$T/fixture/phases/02.json" >"$T/fixture/phases/10.json"
+    activity_phase 10
+    wait_lua "${activity_root}assert(root.p.herd_summary.working == 1 and root.p.herd_summary.blocked == 1)"
+    wait_activity 3 3
+    check_lua "${activity_root}for _, e in root.p.herd_activity do if e.address == 't72' then assert(not table.find(e.runs,'cart')) end end"
+    touch "$T/state/scoped.release"
+    wait_activity 2 2 activity_second
+    wait_lua "local r = cx.session:surface(activity_second,{root='main',depth=0,nodes=1}).main.p; assert(r.herd_scope == 'cart' and r.herd_summary.blocked == 1); local finish; for _, e in r.herd_activity do if e.address == 't72' then finish = e end end; assert(finish and finish.status == 'finished' and finish.exit_code == 7 and table.find(finish.runs,'cart'))"
+    wait_activity 3 3
+    activity_no_sweep
+    echo 'activity scope order: older matching scoped reply associates a nonselected finish after newer All observation, without duplicate events or get'
     ;;
   needs-cycle)
     wait_scope "" 1 1 1

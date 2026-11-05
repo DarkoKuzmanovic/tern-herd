@@ -1,0 +1,51 @@
+{
+  "hidden_finished": 0,
+  "machines": [],
+  "terminals": [
+    {
+      "address": "t80",
+      "name": "gate-cart",
+      "agent": "sh",
+      "cwd": "/home/alex/code/shop/.worktrees/cart-totals",
+      "state": "finished",
+      "exit_code": 0,
+      "turn": 0
+    },
+    {
+      "address": "t81",
+      "name": "gate-checkout",
+      "agent": "sh",
+      "cwd": "/home/alex/code/shop/.worktrees/checkout-layout",
+      "state": "finished",
+      "exit_code": 0,
+      "turn": 0
+    },
+    {
+      "address": "t82",
+      "name": "gate-search",
+      "agent": "sh",
+      "cwd": "/home/alex/code/shop/.worktrees/search-ranking",
+      "state": "finished",
+      "exit_code": 0,
+      "turn": 0
+    },
+    {
+      "address": "t83",
+      "name": "gate-images",
+      "agent": "sh",
+      "cwd": "/home/alex/code/shop/.worktrees/product-images",
+      "state": "finished",
+      "exit_code": 0,
+      "turn": 0
+    },
+    {
+      "address": "t84",
+      "name": "gate-catalog",
+      "agent": "sh",
+      "cwd": "/home/alex/code/shop/.worktrees/catalog",
+      "state": "finished",
+      "exit_code": 0,
+      "turn": 0
+    }
+  ]
+}

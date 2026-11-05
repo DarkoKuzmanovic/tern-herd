@@ -352,16 +352,17 @@ tern.on("tab_closed", wake_requests)
 tern.on("session_ended", wake_requests)
 request_timer = tern.timer(0, poll_requests)
 
--- Status segment: counts the host half publishes in kv while a Herd block
--- polls, read on a timer (formatters must stay pure and fast).
-type Summary = { working: number, blocked: number, errors: number, run: string }
+-- Status segment: the chosen console's scoped root summary, cached on a
+-- timer so the formatter stays pure and fast even with only unread activity.
+type Summary = { working: number, blocked: number, errors: number, unread: number, run: string }
 local summary: Summary? = nil
 
 local function same(a: Summary?, b: Summary?): boolean
 	if a == nil or b == nil then
 		return a == b
 	end
-	return a.working == b.working and a.blocked == b.blocked and a.errors == b.errors and a.run == b.run
+	return a.working == b.working and a.blocked == b.blocked and a.errors == b.errors
+		and a.unread == b.unread and a.run == b.run
 end
 
 local function tick(cx: WindowCx?)
@@ -372,8 +373,9 @@ local function tick(cx: WindowCx?)
 		local root = if type(surface) == "table" then surface.main else nil
 		local s = if root and root.p then root.p.herd_summary else nil
 		if type(s) == "table" and type(s.working) == "number" then
-			local n: Summary = { working = s.working, blocked = tonumber(s.blocked) or 0, errors = tonumber(s.errors) or 0, run = s.run or "" }
-			if n.working + n.blocked + n.errors > 0 then
+			local n: Summary = { working = s.working, blocked = tonumber(s.blocked) or 0,
+				errors = tonumber(s.errors) or 0, unread = tonumber(s.unread) or 0, run = s.run or "" }
+			if n.working + n.blocked + n.errors + n.unread > 0 then
 				next = n
 			end
 		end
@@ -398,6 +400,9 @@ tern.chrome.status(function(_pane: StatusPaneInfo): { StatusSegment }?
 	end
 	if s.errors > 0 then
 		text ..= " · " .. s.errors .. " error"
+	end
+	if s.unread > 0 then
+		text ..= " · " .. s.unread .. " unread"
 	end
 	local tone = if s.errors > 0 then "error" elseif s.blocked > 0 then "warning" elseif s.working > 0 then "info" else "muted"
 	return { { text = text, icon = "users", tone = tone, command = ACTION } }

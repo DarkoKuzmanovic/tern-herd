@@ -14,6 +14,9 @@ in the same commit; see [AGENTS.md](AGENTS.md#releases).
   the palette opens a missing console before presenting its picker.
 - Next/previous needs-you commands and global shortcuts focus the console and
   cycle blocked/errored terminals in its saved scope, without automatically attaching.
+- Activity inbox with shared, scope-aware unread badges, observed transition
+  metadata, explicit Mark read/Clear controls and non-selected finish recording
+  even while finished terminal rows are hidden.
 - Public static Luau type-check CI with pinned, checksum-verified analyzer and
   Tern declarations; local `test/typecheck.sh` checks both plugin halves.
 
