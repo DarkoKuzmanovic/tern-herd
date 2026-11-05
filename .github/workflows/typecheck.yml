@@ -1,0 +1,30 @@
+name: Typecheck
+
+# Static check only. Tern itself needs an account and a display, so the
+# screenshot harness (test/shoot.sh) stays local; see AGENTS.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typecheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  luau-analyze:
+    name: luau-lsp analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Type-check plugins/herd against Tern's declarations
+        # The script verifies both digests on every run, so a fresh cache per job is enough.
+        env:
+          TYPECHECK_CACHE: ${{ runner.temp }}/tern-herd-typecheck
+        run: test/typecheck.sh
